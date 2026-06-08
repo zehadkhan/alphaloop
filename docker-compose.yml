@@ -1,0 +1,12 @@
+services:
+  alphaloop:
+    build: .
+    container_name: alphaloop
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./alphaloop.db:/app/alphaloop.db
+    env_file:
+      - .env
+    restart: unless-stopped
+    command: uvicorn agent.main:app --host 0.0.0.0 --port 8000

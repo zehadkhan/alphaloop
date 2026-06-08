@@ -1,0 +1,220 @@
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+from datetime import datetime, timezone
+from typing import Any
+
+import httpx
+from dotenv import load_dotenv
+
+load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+CMC_BASE    = "https://pro-api.coinmarketcap.com"
+BINANCE_BASE = "https://api.binance.com"
+_DEFAULT_CONVERT = "USD"
+
+# Maps the time_period strings used across the codebase to Binance interval codes
+_BINANCE_INTERVALS: dict[str, str] = {
+    "hourly":  "1h",
+    "daily":   "1d",
+    "weekly":  "1w",
+    "monthly": "1M",
+}
+
+
+class CMCError(Exception):
+    def __init__(self, status_code: int, message: str) -> None:
+        super().__init__(f"CMC API error {status_code}: {message}")
+        self.status_code = status_code
+
+
+class CMCClient:
+    def __init__(self, api_key: str | None = None) -> None:
+        key = api_key or os.getenv("CMC_API_KEY", "")
+        if not key:
+            logger.warning("CMC_API_KEY is not set — quote/metrics calls will fail")
+
+        self._cmc = httpx.AsyncClient(
+            base_url=CMC_BASE,
+            headers={"X-CMC_PRO_API_KEY": key, "Accept": "application/json"},
+            timeout=15,
+        )
+        # Binance public endpoints need no auth header
+        self._binance = httpx.AsyncClient(
+            base_url=BINANCE_BASE,
+            timeout=15,
+        )
+
+    async def __aenter__(self) -> "CMCClient":
+        return self
+
+    async def __aexit__(self, *_: Any) -> None:
+        await self._cmc.aclose()
+        await self._binance.aclose()
+
+    # ------------------------------------------------------------------
+    # CMC helpers
+    # ------------------------------------------------------------------
+
+    async def _cmc_get(self, path: str, params: dict) -> dict:
+        logger.debug("CMC GET %s params=%s", path, params)
+        try:
+            resp = await self._cmc.get(path, params=params)
+        except httpx.TransportError as exc:
+            logger.error("Network error calling CMC %s: %s", path, exc)
+            raise
+
+        payload: dict = resp.json()
+        status     = payload.get("status", {})
+        error_code = status.get("error_code", 0)
+        if error_code != 0:
+            msg = status.get("error_message", "unknown error")
+            logger.error("CMC error %s: %s", error_code, msg)
+            raise CMCError(error_code, msg)
+
+        if resp.status_code != 200:
+            raise CMCError(resp.status_code, resp.text)
+
+        return payload
+
+    # ------------------------------------------------------------------
+    # Public methods
+    # ------------------------------------------------------------------
+
+    async def get_quote(self, symbol: str) -> dict:
+        """Latest price, volume, change and market cap from CMC.
+
+        Returns:
+            {symbol, price, volume_24h, percent_change_1h,
+             percent_change_24h, market_cap}
+        """
+        payload = await self._cmc_get(
+            "/v1/cryptocurrency/quotes/latest",
+            params={"symbol": symbol.upper(), "convert": _DEFAULT_CONVERT},
+        )
+
+        token_data = payload["data"][symbol.upper()]
+        if isinstance(token_data, list):
+            token_data = token_data[0]
+
+        q = token_data["quote"][_DEFAULT_CONVERT]
+        result = {
+            "symbol":             symbol.upper(),
+            "price":              q["price"],
+            "volume_24h":         q["volume_24h"],
+            "percent_change_1h":  q["percent_change_1h"],
+            "percent_change_24h": q["percent_change_24h"],
+            "market_cap":         q["market_cap"],
+        }
+        logger.info("get_quote(%s): price=%.4f", symbol, result["price"])
+        return result
+
+    async def get_ohlcv(
+        self,
+        symbol: str,
+        time_period: str = "daily",
+        count: int = 30,
+    ) -> list[dict]:
+        """Historical OHLCV candles from Binance (no API key required).
+
+        Args:
+            symbol:      Base asset ticker, e.g. "BNB".  Quote is always USDT.
+            time_period: "hourly" | "daily" | "weekly" | "monthly".
+            count:       Number of candles (Binance max 1000).
+
+        Returns:
+            List of {timestamp (ISO-8601), open, high, low, close, volume},
+            oldest candle first.
+        """
+        interval       = _BINANCE_INTERVALS.get(time_period, "1d")
+        binance_symbol = symbol.upper() + "USDT"
+
+        logger.debug("Binance GET /api/v3/klines symbol=%s interval=%s limit=%d",
+                     binance_symbol, interval, count)
+        try:
+            resp = await self._binance.get(
+                "/api/v3/klines",
+                params={"symbol": binance_symbol, "interval": interval, "limit": count},
+            )
+        except httpx.TransportError as exc:
+            logger.error("Network error calling Binance klines: %s", exc)
+            raise
+
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"Binance klines returned {resp.status_code}: {resp.text[:200]}"
+            )
+
+        # Each element is a list; indices per Binance docs:
+        # 0 open_time_ms, 1 open, 2 high, 3 low, 4 close, 5 volume, …
+        candles: list[dict] = []
+        for k in resp.json():
+            open_time = datetime.fromtimestamp(k[0] / 1000, tz=timezone.utc)
+            candles.append({
+                "timestamp": open_time.isoformat(),
+                "open":      float(k[1]),
+                "high":      float(k[2]),
+                "low":       float(k[3]),
+                "close":     float(k[4]),
+                "volume":    float(k[5]),
+            })
+
+        logger.info("get_ohlcv(%s, %s): %d candles via Binance",
+                    symbol, time_period, len(candles))
+        return candles
+
+    async def get_market_metrics(self, symbol: str = "BNB") -> dict:  # noqa: ARG002
+        """Global crypto market metrics from CMC.
+
+        Returns:
+            {total_market_cap, btc_dominance, active_cryptocurrencies}
+        """
+        payload = await self._cmc_get(
+            "/v1/global-metrics/quotes/latest",
+            params={"convert": _DEFAULT_CONVERT},
+        )
+
+        gq = payload["data"]["quote"][_DEFAULT_CONVERT]
+        result = {
+            "total_market_cap":       gq["total_market_cap"],
+            "btc_dominance":          payload["data"]["btc_dominance"],
+            "active_cryptocurrencies": payload["data"]["active_cryptocurrencies"],
+        }
+        logger.info("get_market_metrics: total_cap=%.0f btc_dom=%.2f%%",
+                    result["total_market_cap"], result["btc_dominance"])
+        return result
+
+
+# ---------------------------------------------------------------------------
+# Smoke-test: python -m data.cmc_client
+# ---------------------------------------------------------------------------
+
+async def _main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    symbol = "BNB"
+
+    async with CMCClient() as client:
+        print("\n--- get_quote (CMC) ---")
+        quote = await client.get_quote(symbol)
+        for k, v in quote.items():
+            print(f"  {k}: {v}")
+
+        print("\n--- get_ohlcv daily last 5 (Binance) ---")
+        candles = await client.get_ohlcv(symbol, time_period="daily", count=5)
+        for c in candles:
+            print(f"  {c['timestamp'][:10]}  "
+                  f"O={c['open']:.2f}  H={c['high']:.2f}  "
+                  f"L={c['low']:.2f}  C={c['close']:.2f}  V={c['volume']:.0f}")
+
+        print("\n--- get_market_metrics (CMC) ---")
+        metrics = await client.get_market_metrics(symbol)
+        for k, v in metrics.items():
+            print(f"  {k}: {v}")
+
+
+if __name__ == "__main__":
+    asyncio.run(_main())
