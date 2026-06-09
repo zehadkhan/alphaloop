@@ -52,6 +52,15 @@ class Backtester:
                 f"Invalid levels: entry={entry_price} sl={stop_loss} tp={take_profit}"
             )
 
+        sl_pct = (stop_loss - entry_price) / entry_price * 100
+        tp_pct = (take_profit - entry_price) / entry_price * 100
+        logger.info(
+            "Backtest starting — action=%s  entry=%.2f  sl=%.2f (%+.1f%%)  "
+            "tp=%.2f (%+.1f%%)  candles=%d",
+            strategy["action"], entry_price,
+            stop_loss, sl_pct, take_profit, tp_pct, len(candles),
+        )
+
         trades, equity_curve = self._simulate(
             candles, strategy["action"], entry_price, stop_loss, take_profit
         )
@@ -105,14 +114,14 @@ class Backtester:
     ) -> tuple[list[dict], list[float]]:
         """Walk candles and record trade outcomes.
 
-        Each candle that crosses *entry_price* opens a new trade (one at a
-        time).  We then look at subsequent candles to resolve it at SL or TP.
-        Unresolved trades at the end of the window are closed at the final
-        close price.
+        One trade at a time: after entering on candle i, the loop resumes at
+        the candle AFTER the one that resolved the trade (no overlapping
+        positions).  SL is not checked on the entry candle itself — we
+        assume the limit order filled at entry_price, so the entry candle's
+        wick below that level does not mean SL was hit before entry.
         """
         trades: list[dict] = []
-        # Equity curve: percentage gain/loss on each closed trade in sequence.
-        equity_curve: list[float] = [1.0]  # start at 1.0 (normalised)
+        equity_curve: list[float] = [1.0]
 
         i = 0
         while i < len(candles):
@@ -120,37 +129,37 @@ class Backtester:
             low = float(candle["low"])
             high = float(candle["high"])
 
-            # Check whether entry is reachable on this candle.
-            if action == "BUY" and low <= entry_price <= high:
-                pass  # entry triggered
-            elif action == "SELL" and low <= entry_price <= high:
-                pass
-            else:
+            if not (low <= entry_price <= high):
                 i += 1
                 continue
 
-            # Resolve the trade on this or subsequent candles.
-            outcome, exit_price = self._resolve_trade(
+            # Entry triggered — resolve to SL, TP, or window end.
+            outcome, exit_price, resolve_idx = self._resolve_trade(
                 candles, i, action, entry_price, stop_loss, take_profit
             )
 
             pnl_pct = self._pnl_percent(action, entry_price, exit_price)
             equity_curve.append(equity_curve[-1] * (1 + pnl_pct))
 
-            trades.append(
-                {
-                    "entry": entry_price,
-                    "exit": exit_price,
-                    "outcome": outcome,
-                    "pnl_pct": pnl_pct,
-                    "candle_open": candle.get("timestamp", ""),
-                }
+            logger.info(
+                "  Trade %d: entry=%.2f  sl=%.2f  tp=%.2f  exit=%.2f  "
+                "pnl=%+.2f%%  [%s]  candle=%s",
+                len(trades) + 1,
+                entry_price, stop_loss, take_profit, exit_price,
+                pnl_pct * 100, outcome,
+                candle.get("timestamp", "")[:10],
             )
 
-            # Skip past the resolution candle to avoid overlapping trades.
-            # For simplicity advance by 1 — real systems would track the
-            # exact resolution index, but it doesn't affect the stat calculations.
-            i += 1
+            trades.append({
+                "entry":       entry_price,
+                "exit":        exit_price,
+                "outcome":     outcome,
+                "pnl_pct":     pnl_pct,
+                "candle_open": candle.get("timestamp", ""),
+            })
+
+            # Advance past the resolution candle so positions don't overlap.
+            i = resolve_idx + 1
 
         return trades, equity_curve
 
@@ -162,25 +171,28 @@ class Backtester:
         entry_price: float,
         stop_loss: float,
         take_profit: float,
-    ) -> tuple[TradeOutcome, float]:
-        """Scan forward from *entry_idx* and return (outcome, exit_price).
+    ) -> tuple[TradeOutcome, float, int]:
+        """Scan forward from *entry_idx* and return (outcome, exit_price, candle_idx).
 
-        Stop-loss is checked before take-profit within each candle (conservative).
+        On the entry candle, only TP is checked — SL is skipped because the
+        fill happened at entry_price and the wick below it predates our entry.
+        From the next candle onwards, SL is checked before TP (conservative).
         """
-        for candle in candles[entry_idx:]:
+        for offset, candle in enumerate(candles[entry_idx:]):
             low = float(candle["low"])
             high = float(candle["high"])
+            is_entry_candle = (offset == 0)
 
             if action == "BUY":
-                if low <= stop_loss:
-                    return "LOSS", stop_loss
+                if not is_entry_candle and low <= stop_loss:
+                    return "LOSS", stop_loss, entry_idx + offset
                 if high >= take_profit:
-                    return "WIN", take_profit
+                    return "WIN", take_profit, entry_idx + offset
             else:  # SELL
-                if high >= stop_loss:
-                    return "LOSS", stop_loss
+                if not is_entry_candle and high >= stop_loss:
+                    return "LOSS", stop_loss, entry_idx + offset
                 if low <= take_profit:
-                    return "WIN", take_profit
+                    return "WIN", take_profit, entry_idx + offset
 
         # Trade still open at end of window — exit at final close.
         final_close = float(candles[-1]["close"])
@@ -190,7 +202,7 @@ class Backtester:
             or (action == "SELL" and final_close < entry_price)
             else "LOSS"
         )
-        return outcome, final_close
+        return outcome, final_close, len(candles) - 1
 
     # ------------------------------------------------------------------
     # Metrics

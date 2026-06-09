@@ -58,6 +58,14 @@ Respond with a single JSON object that strictly matches this schema — no markd
   "timeframe": "short" | "medium",
   "risk_level": "low" | "medium" | "high"
 }}
+
+Pricing rules (important for backtesting realism):
+- entry_price: set as a limit order, slightly offset from current price.
+  BUY → 0.3–1.5% BELOW current price (await a small pullback).
+  SELL → 0.3–1.5% ABOVE current price (await a small rally).
+- stop_loss: at least 3% away from entry_price (daily candles have wide ranges).
+- take_profit: risk/reward ratio ≥ 1.5 (tp distance ≥ 1.5 × sl distance from entry).
+- All three values must be realistic absolute prices, not percentages.
 """
 
 _REQUIRED_FIELDS: dict[str, type | tuple[type, ...]] = {
