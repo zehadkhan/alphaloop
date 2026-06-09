@@ -1,0 +1,31 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Secrets / local config
+.env
+
+# Logs and temp
+*.log
+/tmp/
+
+# Git
+.git/
+.gitignore
+
+# Dev tools
+.claude/
+.vscode/
+.idea/
+
+# Dashboard (built separately)
+dashboard/node_modules/
+dashboard/.next/
+dashboard/npm-debug.log*
+
+# SQLite data (mounted as volume in Docker)
+storage/*.db
