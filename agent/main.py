@@ -160,9 +160,11 @@ async def status() -> dict:
     ]
 
     return {
-        "environment":   config.ENVIRONMENT,
-        "trading_pair":  config.TRADING_PAIR,
-        "last_run":      last_run,
+        "environment":    config.ENVIRONMENT,
+        "trading_pair":   config.TRADING_PAIR,
+        "dry_run":        config.DRY_RUN,
+        "max_position_usd": config.MAX_POSITION_SIZE_USD,
+        "last_run":       last_run,
         "scheduled_jobs": jobs,
     }
 
@@ -183,6 +185,13 @@ async def get_strategies(
     """List generated strategies, newest first."""
     rows = await list_strategies(symbol=symbol, status=status, limit=limit)
     return {"count": len(rows), "strategies": [_strategy_dict(s) for s in rows]}
+
+
+@app.get("/runs", tags=["data"])
+async def get_runs(limit: int = 20) -> dict:
+    """List all agent runs, newest first."""
+    rows = await list_agent_runs(limit=limit)
+    return {"count": len(rows), "runs": [_run_dict(r) for r in rows]}
 
 
 @app.post("/run", tags=["control"])

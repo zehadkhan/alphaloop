@@ -285,11 +285,11 @@ def test_strategy_missing_fields():
         assert "missing" in str(exc).lower()
 
 
-@run_test("StrategyGenerator — full LLM call (OpenRouter)")
+@run_test("StrategyGenerator — full LLM call (Anthropic)")
 async def test_strategy_live():
-    key = os.getenv("OPENROUTER_API_KEY", "")
+    key = os.getenv("ANTHROPIC_API_KEY", "")
     if not key:
-        return "OPENROUTER_API_KEY not set"
+        return "ANTHROPIC_API_KEY not set"
 
     from strategy.generator import StrategyGenerator
 
@@ -312,7 +312,135 @@ async def test_strategy_live():
 
 
 # ---------------------------------------------------------------------------
-# Test 4 — CMC API connection
+# Test 4 — Database CRUD
+# ---------------------------------------------------------------------------
+
+@run_test("Database — init, write, read lifecycle")
+async def test_db_lifecycle():
+    from db.models import (
+        init_db, create_agent_run, complete_agent_run, list_agent_runs,
+        create_strategy, update_strategy_backtest, create_trade, list_trades,
+    )
+
+    # init_db is idempotent — create_all is a no-op when tables already exist
+    await init_db()
+
+    run = await create_agent_run()
+    assert run.id is not None
+
+    strategy = await create_strategy({
+        "symbol": "TEST", "action": "BUY", "confidence": 0.75,
+        "entry_price": 600.0, "stop_loss": 570.0, "take_profit": 640.0,
+        "reasoning": "unit test", "timeframe": "medium", "risk_level": "low",
+        "status": "pending",
+    })
+    assert strategy.id is not None
+
+    await update_strategy_backtest(strategy.id, passed=True, total_return=3.5, win_rate=0.6)
+
+    trade = await create_trade({
+        "strategy_id": strategy.id, "symbol": "TEST", "action": "BUY",
+        "amount_usd": 10.0, "entry_price": 600.0, "status": "dry_run",
+        "executed_at": datetime.now(timezone.utc),
+    })
+    assert trade.id is not None
+
+    await complete_agent_run(run.id, strategies_generated=1, trades_executed=1, total_pnl=0.0)
+
+    runs = await list_agent_runs(limit=5)
+    assert len(runs) >= 1
+
+    trades = await list_trades(symbol="TEST")
+    assert len(trades) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Test 5 — FastAPI endpoints (in-process ASGI client, no real network)
+# ---------------------------------------------------------------------------
+
+@run_test("FastAPI — /health returns ok")
+async def test_fastapi_health():
+    from httpx import AsyncClient, ASGITransport
+    from db.models import init_db
+    await init_db()
+
+    from agent.main import app
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/health")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert "environment" in data
+
+
+@run_test("FastAPI — /status returns expected fields")
+async def test_fastapi_status():
+    from httpx import AsyncClient, ASGITransport
+    from agent.main import app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.get("/status")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "environment" in data
+    assert "trading_pair" in data
+    assert "dry_run" in data
+    assert "scheduled_jobs" in data
+
+
+@run_test("FastAPI — /trades /strategies /runs return lists")
+async def test_fastapi_lists():
+    from httpx import AsyncClient, ASGITransport
+    from agent.main import app
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        t_resp = await client.get("/trades")
+        s_resp = await client.get("/strategies")
+        r_resp = await client.get("/runs")
+
+    assert t_resp.status_code == 200 and "trades" in t_resp.json()
+    assert s_resp.status_code == 200 and "strategies" in s_resp.json()
+    assert r_resp.status_code == 200 and "runs" in r_resp.json()
+
+
+# ---------------------------------------------------------------------------
+# Test 6 — Scheduler helpers (pure logic, no real I/O)
+# ---------------------------------------------------------------------------
+
+@run_test("Scheduler — _compute_pnl BUY returns zero")
+def test_compute_pnl_buy():
+    from agent.scheduler import _compute_pnl
+
+    pnl_usd, pnl_pct = _compute_pnl("BUY", {"amount_out": 0.016}, 10.0)
+    assert pnl_usd == 0.0
+    assert pnl_pct == 0.0
+
+
+@run_test("Scheduler — _compute_pnl SELL computes correctly")
+def test_compute_pnl_sell():
+    from agent.scheduler import _compute_pnl
+
+    # Received 10.50 USDT for a $10 position → +$0.50 / +5%
+    pnl_usd, pnl_pct = _compute_pnl("SELL", {"amount_out": 10.50}, 10.0)
+    assert abs(pnl_usd - 0.5) < 0.001, f"Expected 0.5, got {pnl_usd}"
+    assert abs(pnl_pct - 5.0) < 0.001, f"Expected 5.0, got {pnl_pct}"
+
+
+@run_test("Scheduler — _ohlcv_to_dataframe shape and index")
+def test_ohlcv_to_dataframe():
+    from agent.scheduler import _ohlcv_to_dataframe
+
+    candles = _make_ohlcv(10)
+    df = _ohlcv_to_dataframe(candles)
+    assert len(df) == 10
+    assert list(df.columns) == ["open", "high", "low", "close", "volume"]
+    assert str(df.index.dtype) == "datetime64[ns, UTC]"
+
+
+# ---------------------------------------------------------------------------
+# Test 7 — CMC API connection
 # ---------------------------------------------------------------------------
 
 @run_test("CMC API — get_quote(BNB)")
@@ -376,16 +504,30 @@ async def main() -> None:
     print("=" * 60 + "\n")
 
     tests = [
+        # Indicators
         test_indicators,
+        # Backtester
         test_backtester_buy,
         test_backtester_sell,
         test_backtester_hold,
         test_backtester_invalid_levels,
+        # Strategy generator
         test_strategy_prompt,
         test_strategy_validate,
         test_strategy_strip_fences,
         test_strategy_missing_fields,
         test_strategy_live,
+        # Database
+        test_db_lifecycle,
+        # FastAPI
+        test_fastapi_health,
+        test_fastapi_status,
+        test_fastapi_lists,
+        # Scheduler helpers
+        test_compute_pnl_buy,
+        test_compute_pnl_sell,
+        test_ohlcv_to_dataframe,
+        # External APIs
         test_cmc_quote,
         test_cmc_ohlcv,
         test_cmc_metrics,

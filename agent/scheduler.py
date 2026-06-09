@@ -95,7 +95,7 @@ async def _run_cycle_impl() -> dict:
         )
 
         # ── 3. Generate strategy via LLM ──────────────────────────────────
-        logger.info("[3/6] Generating strategy via OpenRouter…")
+        logger.info("[3/6] Generating strategy via Claude (Anthropic)…")
         async with StrategyGenerator() as gen:
             strategy = await gen.generate(symbol, market_data, indicators)
 
@@ -189,6 +189,10 @@ async def _run_cycle_impl() -> dict:
         total_pnl = pnl_usd
 
         # ── 9. Save trade ─────────────────────────────────────────────────
+        # Map PancakeSwap statuses → Trade model statuses:
+        #   "success" → "executed", "failed" → "failed", "dry_run" → "dry_run"
+        trade_status = "executed" if swap["status"] == "success" else swap["status"]
+
         logger.info("[6/6] Saving trade to database…")
         trade = await create_trade({
             "strategy_id": db_strategy.id,
@@ -200,7 +204,7 @@ async def _run_cycle_impl() -> dict:
             "pnl_usd":     pnl_usd  if strategy["action"] == "SELL" else None,
             "pnl_percent": pnl_pct  if strategy["action"] == "SELL" else None,
             "tx_hash":     swap["tx_hash"],
-            "status":      swap["status"],
+            "status":      trade_status,
             "executed_at": datetime.now(timezone.utc),
         })
 

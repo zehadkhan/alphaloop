@@ -5,7 +5,8 @@ pandas==2.2.2
 numpy==1.26.4
 python-dotenv==1.0.1
 apscheduler==3.10.4
-sqlalchemy==2.0.30
+sqlalchemy==2.0.50
 aiosqlite==0.20.0
+greenlet>=3.0.0
 web3==6.20.3
 anthropic==0.40.0
