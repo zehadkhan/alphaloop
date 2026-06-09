@@ -30,7 +30,7 @@ ROUTER_ADDRESS = "0xD99D1c33F9fC3444f8101754aBC46c52416550D1"
 
 # WBNB is what the router uses internally when you pass native BNB
 WBNB_ADDRESS  = "0xae13d989daC2f0dEbFf460aC112a837C89BAa7cd"
-USDT_ADDRESS  = "0x337610d27c682E347C9cD60BD4b3b107C9d34dE"
+USDT_ADDRESS  = "0x337610D27C682E347C9cd60bD4b3b107c9d34ddE"
 
 TOKEN_ADDRESSES: dict[str, str] = {
     "BNB":  WBNB_ADDRESS,   # router treats native BNB as WBNB in path
@@ -191,18 +191,42 @@ class PancakeSwapExecutor:
         )
 
         # ── 1. Resolve amount_in from USD ──────────────────────────────
-        amount_in_human, amount_in_wei = await self._usd_to_token_amount(
-            token_in, amount_usd
-        )
+        # BNB input requires a price quote from the chain; use a rough estimate
+        # in dry_run to avoid any RPC call before we short-circuit.
+        if self.dry_run and token_in == "BNB":
+            _bnb_est = 600.0
+            amount_in_human = amount_usd / _bnb_est
+            amount_in_wei   = self._w3.to_wei(amount_in_human, "ether")
+        else:
+            amount_in_human, amount_in_wei = await self._usd_to_token_amount(
+                token_in, amount_usd
+            )
 
-        # ── 2. Safety: balance check ───────────────────────────────────
+        # ── 2. DRY-RUN: exit before any on-chain calls ────────────────
+        if self.dry_run:
+            logger.warning(
+                "[DRY-RUN] Swap NOT broadcast.  %s %.6f → %s  wallet=%s",
+                token_in, amount_in_human, token_out, self._wallet.address,
+            )
+            return {
+                "tx_hash":    None,
+                "token_in":   token_in,
+                "token_out":  token_out,
+                "amount_in":  amount_in_human,
+                "amount_out": 0.0,
+                "price":      0.0,
+                "gas_used":   0,
+                "status":     "dry_run",
+            }
+
+        # ── 3. Safety: balance check ───────────────────────────────────
         balance = await self._wallet.get_balance(token_in)
         if balance < amount_in_human:
             raise InsufficientBalanceError(
                 f"Need {amount_in_human:.6f} {token_in}, wallet has {balance:.6f}"
             )
 
-        # ── 3. Quote expected output with slippage floor ───────────────
+        # ── 4. Quote expected output with slippage floor ───────────────
         path = self._build_path(token_in, token_out)
         try:
             amounts = await self._router.functions.getAmountsOut(amount_in_wei, path).call()
@@ -215,11 +239,11 @@ class PancakeSwapExecutor:
         amount_out_min = expected_out_wei * (10_000 - SLIPPAGE_BPS) // 10_000
         deadline = int(time.time()) + DEADLINE_SECONDS
 
-        # ── 4. Approve router when spending a BEP-20 token ────────────
+        # ── 5. Approve router when spending a BEP-20 token ────────────
         if token_in != "BNB":
             await self._ensure_allowance(token_in, amount_in_wei)
 
-        # ── 5. Build the swap transaction ─────────────────────────────
+        # ── 6. Build the swap transaction ─────────────────────────────
         try:
             if token_in == "BNB":
                 tx = await self._build_eth_for_tokens(
@@ -232,31 +256,7 @@ class PancakeSwapExecutor:
         except ContractLogicError as exc:
             raise SwapError(f"Transaction build failed: {exc}") from exc
 
-        # ── 6. DRY-RUN: log and return without broadcasting ───────────
-        if self.dry_run:
-            expected_out = expected_out_wei / 10 ** decimals_out
-            price = expected_out / amount_in_human if amount_in_human else 0.0
-            logger.warning(
-                "[DRY-RUN] Swap NOT broadcast.  "
-                "%s %.6f → %s ~%.6f  price=%.4f  slippage=%.1f%%  "
-                "deadline=%d  router=%s  wallet=%s",
-                token_in, amount_in_human,
-                token_out, expected_out,
-                price, SLIPPAGE_BPS / 100,
-                deadline, ROUTER_ADDRESS, self._wallet.address,
-            )
-            return {
-                "tx_hash":    None,
-                "token_in":   token_in,
-                "token_out":  token_out,
-                "amount_in":  amount_in_human,
-                "amount_out": round(expected_out, 8),
-                "price":      round(price, 6),
-                "gas_used":   0,
-                "status":     "dry_run",
-            }
-
-        # ── 7. Sign → broadcast → wait for receipt ────────────────────
+        # ── 7. Sign → broadcast → wait for receipt (live only) ──────────
         signed_hex = await self._wallet.sign_transaction(tx)
         tx_hash = await self._wallet.send_transaction(signed_hex)
 
@@ -339,9 +339,18 @@ class PancakeSwapExecutor:
             self._w3.to_checksum_address(TOKEN_ADDRESSES[token_out]),
         ]
 
+    # BSC testnet BEP-20 decimals — hardcoded to avoid RPC calls for known tokens.
+    _KNOWN_DECIMALS: dict[str, int] = {
+        "BNB":  18,
+        "WBNB": 18,
+        "USDT": 18,   # BSC testnet USDT (BEP-20) uses 18 decimals
+        "BUSD": 18,
+    }
+
     async def _token_decimals(self, symbol: str) -> int:
-        if symbol == "BNB":
-            return 18
+        known = self._KNOWN_DECIMALS.get(symbol.upper())
+        if known is not None:
+            return known
         addr = TOKEN_ADDRESSES.get(symbol.upper())
         if not addr:
             return 18  # safe default for most BEP-20

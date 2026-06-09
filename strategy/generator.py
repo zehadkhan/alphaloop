@@ -59,13 +59,22 @@ Respond with a single JSON object that strictly matches this schema — no markd
   "risk_level": "low" | "medium" | "high"
 }}
 
-Pricing rules (important for backtesting realism):
-- entry_price: set as a limit order, slightly offset from current price.
-  BUY → 0.3–1.5% BELOW current price (await a small pullback).
-  SELL → 0.3–1.5% ABOVE current price (await a small rally).
-- stop_loss: at least 3% away from entry_price (daily candles have wide ranges).
-- take_profit: risk/reward ratio ≥ 1.5 (tp distance ≥ 1.5 × sl distance from entry).
-- All three values must be realistic absolute prices, not percentages.
+Critical pricing rules — all values must be absolute prices (not percentages):
+
+For BUY action (current price ≈ {price:.2f}):
+  entry_price  = 0.5–1.5% BELOW current price  (limit buy on a small pullback)
+  stop_loss    = 3–5% BELOW entry_price         (must be strictly less than entry)
+  take_profit  = 5–10% ABOVE entry_price        (must be strictly greater than entry)
+  Example: price={price:.2f} → entry≈{buy_entry:.2f}, sl≈{buy_sl:.2f}, tp≈{buy_tp:.2f}
+
+For SELL action (current price ≈ {price:.2f}):
+  entry_price  = 0.5–1.5% ABOVE current price  (limit sell on a small rally)
+  stop_loss    = 3–5% ABOVE entry_price         (must be strictly greater than entry)
+  take_profit  = 5–10% BELOW entry_price        (must be strictly less than entry)
+  Example: price={price:.2f} → entry≈{sell_entry:.2f}, sl≈{sell_sl:.2f}, tp≈{sell_tp:.2f}
+
+For HOLD action: entry_price, stop_loss, take_profit = current price (placeholder only).
+Risk/reward must be ≥ 1.5 (tp_distance / sl_distance ≥ 1.5).
 """
 
 _REQUIRED_FIELDS: dict[str, type | tuple[type, ...]] = {
@@ -157,6 +166,14 @@ class StrategyGenerator:
         if abs(change_24h) > 5:
             conditions += f", high 24 h volatility ({change_24h:+.1f}%)"
 
+        # Pre-compute example price levels so the prompt shows concrete numbers.
+        buy_entry = price * 0.99
+        buy_sl    = buy_entry * 0.96
+        buy_tp    = buy_entry * 1.07
+        sell_entry = price * 1.01
+        sell_sl    = sell_entry * 1.04
+        sell_tp    = sell_entry * 0.93
+
         return _USER_PROMPT_TEMPLATE.format(
             pair=pair,
             price=price,
@@ -174,6 +191,12 @@ class StrategyGenerator:
             sma_20=indicators.get("sma_20", price),
             sma_50=indicators.get("sma_50", price),
             conditions=conditions,
+            buy_entry=buy_entry,
+            buy_sl=buy_sl,
+            buy_tp=buy_tp,
+            sell_entry=sell_entry,
+            sell_sl=sell_sl,
+            sell_tp=sell_tp,
         )
 
     async def _call_claude(self, user_prompt: str) -> str:
