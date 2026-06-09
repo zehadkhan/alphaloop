@@ -8,6 +8,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Ensure the storage directory exists so SQLite can create the DB file
+RUN mkdir -p /app/storage
+
 EXPOSE 8000
 
 CMD ["uvicorn", "agent.main:app", "--host", "0.0.0.0", "--port", "8000"]

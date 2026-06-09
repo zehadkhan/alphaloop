@@ -5,7 +5,9 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./alphaloop.db:/app/alphaloop.db
+      - ./storage:/app/storage
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:////app/storage/alphaloop.db
     env_file:
       - .env
     restart: unless-stopped

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Sequence
 
@@ -24,7 +25,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 logger = logging.getLogger(__name__)
 
-DATABASE_URL = "sqlite+aiosqlite:///./alphaloop.db"
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./alphaloop.db")
 
 engine = create_async_engine(
     DATABASE_URL,
