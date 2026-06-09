@@ -15,6 +15,11 @@ class Config:
     MAX_POSITION_SIZE_USD: float = float(os.getenv("MAX_POSITION_SIZE_USD", "10"))
     STOP_LOSS_PERCENT: float = float(os.getenv("STOP_LOSS_PERCENT", "5"))
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "testnet")
+    # DRY_RUN defaults True on testnet; set DRY_RUN=false to enable live execution
+    DRY_RUN: bool = os.getenv(
+        "DRY_RUN",
+        "true" if os.getenv("ENVIRONMENT", "testnet") == "testnet" else "false",
+    ).lower() == "true"
     MIN_CONFIDENCE: float = float(os.getenv("MIN_CONFIDENCE", "0.6"))
     CYCLE_INTERVAL_MINUTES: int = int(os.getenv("CYCLE_INTERVAL_MINUTES", "30"))
 

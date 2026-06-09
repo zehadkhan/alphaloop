@@ -130,10 +130,14 @@ class PancakeSwapExecutor:
     Takes a WalletAgent for signing/broadcasting; owns its own web3 instance
     for read-only calls (getAmountsOut, allowance) so it doesn't share state
     with the wallet's web3.
+
+    DRY_RUN mode mirrors wallet.py: read-only calls (getAmountsOut, price
+    fetches) still run against the network, but no transactions are broadcast.
     """
 
     def __init__(self, wallet: WalletAgent, rpc_url: str | None = None) -> None:
         self._wallet = wallet
+        self.dry_run: bool = wallet.dry_run
         rpc = rpc_url or os.getenv("BSC_RPC_URL", "https://bsc-testnet-rpc.publicnode.com")
         self._w3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(rpc))
         self._w3.middleware_onion.inject(PoAMiddleware, layer=0)
@@ -228,14 +232,38 @@ class PancakeSwapExecutor:
         except ContractLogicError as exc:
             raise SwapError(f"Transaction build failed: {exc}") from exc
 
-        # ── 6. Sign → broadcast → wait for receipt ────────────────────
+        # ── 6. DRY-RUN: log and return without broadcasting ───────────
+        if self.dry_run:
+            expected_out = expected_out_wei / 10 ** decimals_out
+            price = expected_out / amount_in_human if amount_in_human else 0.0
+            logger.warning(
+                "[DRY-RUN] Swap NOT broadcast.  "
+                "%s %.6f → %s ~%.6f  price=%.4f  slippage=%.1f%%  "
+                "deadline=%d  router=%s  wallet=%s",
+                token_in, amount_in_human,
+                token_out, expected_out,
+                price, SLIPPAGE_BPS / 100,
+                deadline, ROUTER_ADDRESS, self._wallet.address,
+            )
+            return {
+                "tx_hash":    None,
+                "token_in":   token_in,
+                "token_out":  token_out,
+                "amount_in":  amount_in_human,
+                "amount_out": round(expected_out, 8),
+                "price":      round(price, 6),
+                "gas_used":   0,
+                "status":     "dry_run",
+            }
+
+        # ── 7. Sign → broadcast → wait for receipt ────────────────────
         signed_hex = await self._wallet.sign_transaction(tx)
         tx_hash = await self._wallet.send_transaction(signed_hex)
 
         receipt = await self._wait_for_receipt(tx_hash)
         success = receipt["status"] == 1
 
-        # ── 7. Parse actual amounts from receipt logs ─────────────────
+        # ── 8. Parse actual amounts from receipt logs ─────────────────
         actual_out_wei = self._parse_amount_out(receipt, token_out)
         actual_out = actual_out_wei / 10 ** decimals_out if actual_out_wei else (
             expected_out_wei / 10 ** decimals_out
@@ -339,7 +367,14 @@ class PancakeSwapExecutor:
         return human, int(wei)
 
     async def _ensure_allowance(self, token: str, required_wei: int) -> None:
-        """Approve the router to spend *required_wei* of *token* if needed."""
+        """Approve the router to spend *required_wei* of *token* if needed.
+
+        Skipped entirely in dry_run — no on-chain state to read or write.
+        """
+        if self.dry_run:
+            logger.info("[DRY-RUN] Skipping allowance check/approval for %s", token)
+            return
+
         addr = self._w3.to_checksum_address(TOKEN_ADDRESSES[token])
         contract = self._w3.eth.contract(address=addr, abi=_ERC20_ABI)
         current = await contract.functions.allowance(
