@@ -13,8 +13,8 @@ from typing import Any
 
 from dotenv import load_dotenv
 from web3 import AsyncWeb3
-from web3.middleware import ExtraDataToPOAMiddleware
 from web3.exceptions import ContractLogicError
+from execution._compat import PoAMiddleware
 
 from execution.wallet import WalletAgent, WalletError, InsufficientBalanceError
 
@@ -136,7 +136,7 @@ class PancakeSwapExecutor:
         self._wallet = wallet
         rpc = rpc_url or os.getenv("BSC_RPC_URL", "https://bsc-testnet-rpc.publicnode.com")
         self._w3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(rpc))
-        self._w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+        self._w3.middleware_onion.inject(PoAMiddleware, layer=0)
         self._router = self._w3.eth.contract(
             address=self._w3.to_checksum_address(ROUTER_ADDRESS),
             abi=_ROUTER_ABI,

@@ -15,8 +15,8 @@ from typing import Any
 from dotenv import load_dotenv
 from web3 import AsyncWeb3
 from web3.exceptions import TransactionNotFound
-from web3.middleware import ExtraDataToPOAMiddleware
 from eth_account import Account
+from execution._compat import PoAMiddleware
 from eth_account.signers.local import LocalAccount
 
 load_dotenv()
@@ -71,7 +71,7 @@ class WalletAgent:
         self._w3 = AsyncWeb3(AsyncWeb3.AsyncHTTPProvider(rpc))
         # BSC uses Clique PoA; the extra-data field is longer than Ethereum's
         # and web3.py raises if we don't install this middleware.
-        self._w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
+        self._w3.middleware_onion.inject(PoAMiddleware, layer=0)
 
         self._max_position_usd: float = max_position_usd or float(
             os.getenv("MAX_POSITION_SIZE_USD", "10")
