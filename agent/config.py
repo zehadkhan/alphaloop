@@ -11,7 +11,7 @@ class Config:
     BSC_RPC_URL: str = os.getenv("BSC_RPC_URL", "https://bsc-testnet-rpc.publicnode.com")
     AGENT_WALLET_ADDRESS: str = os.getenv("AGENT_WALLET_ADDRESS", "")
     AGENT_PRIVATE_KEY: str = os.getenv("AGENT_PRIVATE_KEY", "")
-    TRADING_PAIR: str = os.getenv("TRADING_PAIR", "BNB/USDT")
+    TRADING_PAIR: str = os.getenv("TRADING_PAIR", "ETH/USDT")
     MAX_POSITION_SIZE_USD: float = float(os.getenv("MAX_POSITION_SIZE_USD", "10"))
     STOP_LOSS_PERCENT: float = float(os.getenv("STOP_LOSS_PERCENT", "5"))
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "testnet")
@@ -26,12 +26,20 @@ class Config:
 
     # Token scanner
     TOKEN_SCAN_TOP_N: int = int(os.getenv("TOKEN_SCAN_TOP_N", "3"))   # scan top N momentum tokens
-    # Eligible BSC tokens (Binance USDT pairs, competition list subset)
+    # Eligible BSC tokens — sourced directly from the BNB HACK competition allowlist.
+    # BNB is excluded (not in competition's BEP-20 eligible list).
+    # Stablecoins excluded (no price movement = no signal).
     ELIGIBLE_TOKENS: list[str] = [
-        "BNB", "BTC", "ETH", "SOL", "ADA", "DOT", "LINK", "UNI", "AAVE",
-        "CAKE", "NEAR", "AVAX", "MATIC", "ATOM", "FTM", "VET", "SAND",
-        "MANA", "CHZ", "XRP", "LTC", "BCH", "ETC", "TRX", "XLM",
-        "ALGO", "DOGE", "SHIB", "APE", "OP",
+        # High-liquidity DeFi
+        "ETH", "CAKE", "LINK", "UNI", "AAVE", "COMP", "SNX", "1INCH", "SUSHI",
+        # Layer-1s with good BSC bridge liquidity
+        "ADA", "DOT", "AVAX", "ATOM", "XRP", "TRX", "LTC", "BCH", "ETC",
+        # Meme / high-volatility (more trading signals)
+        "DOGE", "SHIB", "FLOKI", "BONK", "APE",
+        # AI + trending DeFi
+        "FET", "INJ", "LDO", "PENDLE",
+        # Others with solid BSC presence
+        "AXS", "YFI", "FIL",
     ]
 
     # TWAK REST server
