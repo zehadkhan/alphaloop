@@ -84,26 +84,6 @@ DATABASE_URL=sqlite+aiosqlite:///./storage/alphaloop.db
 
 ---
 
-## Prize Targets
-
-| Prize | Value | Requirement |
-|-------|-------|-------------|
-| Track 1 Top 5 (best PnL) | $2,000–$10,000 | Live trades, no DQ |
-| Best Use of TWAK | $2,000 | TWAK-only execution + x402 |
-| Best Use of CMC Agent Hub | $2,000 | CMC data + x402 payments |
-| Best Use of BNB AI Agent SDK | $2,000 | EVMWalletProvider + ERC-8004 |
-
-### DQ Rules — must not happen
-
-- Miss on-chain registration before June 22
-- Portfolio drawdown > 30% (circuit breaker fires at 25%)
-- Zero trades on any day (daily trade guarantee built in)
-- Trade a token not on the eligible list
-- Private key committed to public repo
-- Agent stays down during the trading window
-
----
-
 ## Architecture
 
 ```
@@ -154,7 +134,7 @@ DATABASE_URL=sqlite+aiosqlite:///./storage/alphaloop.db
 | Layer | Library | Purpose |
 |-------|---------|---------|
 | API server | FastAPI + uvicorn | REST endpoints, lifespan hooks |
-| Scheduler | APScheduler | 30-min agent cycle + 5-min trade monitor |
+| Scheduler | APScheduler | 30-min agent cycle + 2-min trade monitor |
 | Market data | httpx + CMC API | Quotes and OHLCV candles |
 | Token scanner | Binance public API | RSI + momentum score across 30 tokens |
 | Strategy | Anthropic Claude | LLM reasoning over indicators |

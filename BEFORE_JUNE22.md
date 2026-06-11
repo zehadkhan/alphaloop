@@ -4,6 +4,26 @@ Competition window: **June 22–28, 2026**
 
 ---
 
+## Prize Targets
+
+| Prize | Value | Requirement |
+|-------|-------|-------------|
+| Track 1 Top 5 (best PnL) | $2,000–$10,000 | Live trades, no DQ |
+| Best Use of TWAK | $2,000 | TWAK-only execution + x402 |
+| Best Use of CMC Agent Hub | $2,000 | CMC data + x402 payments |
+| Best Use of BNB AI Agent SDK | $2,000 | EVMWalletProvider + ERC-8004 |
+
+## DQ Rules — must not happen
+
+- [ ] Miss on-chain registration before June 22
+- [ ] Portfolio drawdown > 30% (circuit breaker fires at 25% ✅)
+- [ ] Zero trades on any day (daily trade guarantee built in ✅)
+- [ ] Trade a token not on the eligible list ⚠️ update ELIGIBLE_TOKENS
+- [ ] Private key committed to public repo ✅ .gitignore covers .env
+- [ ] Agent stays down during the trading window
+
+---
+
 ## 1. Real Wallet তৈরি ও Fund করা
 - [ ] TWAK CLI install করো: `npm install -g @trustwallet/twak-cli`
 - [ ] Wallet তৈরি করো: `twak wallet import --name alphaloop`
