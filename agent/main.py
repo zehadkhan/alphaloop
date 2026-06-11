@@ -255,6 +255,166 @@ async def get_runs(limit: int = 20) -> dict:
     return {"count": len(rows), "runs": [_run_dict(r) for r in rows]}
 
 
+# ---------------------------------------------------------------------------
+# Activity feed helpers
+# ---------------------------------------------------------------------------
+
+def _ensure_aware(dt: datetime | None) -> datetime | None:
+    from datetime import timezone as _tz
+    if dt is None:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=_tz.utc)
+
+
+def _activity_item(run: AgentRun, strategies: list, trades: list) -> dict:
+    base: dict = {
+        "id": run.id,
+        "time": _fmt_dt(run.started_at),
+        "duration_s": None,
+    }
+    if run.started_at and run.completed_at:
+        try:
+            base["duration_s"] = round(
+                (_ensure_aware(run.completed_at) - _ensure_aware(run.started_at)).total_seconds()  # type: ignore[operator]
+            )
+        except Exception:
+            pass
+
+    if run.error_message:
+        return {**base, "type": "error", "color": "red",
+                "title": "System error — the cycle could not complete",
+                "detail": run.error_message[:300], "reasoning": None}
+
+    if not run.completed_at:
+        return {**base, "type": "running", "color": "blue",
+                "title": "Cycle in progress…", "detail": None, "reasoning": None}
+
+    if not strategies and not trades:
+        return {**base, "type": "skipped", "color": "gray",
+                "title": "Skipped — already holding an open position",
+                "detail": "The bot only opens one trade at a time. It waited for the current position to close before looking for a new one.",
+                "reasoning": None}
+
+    buy_strats   = [s for s in strategies if s.action == "BUY"]
+    hold_strats  = [s for s in strategies if s.action == "HOLD"]
+    approved     = [s for s in buy_strats  if s.status == "approved"]
+    rejected_bt  = [s for s in buy_strats  if s.status == "rejected"]
+
+    if trades and approved:
+        s = approved[0]
+        t = trades[0]
+        conf_pct = round(s.confidence * 100)
+        return {
+            **base,
+            "type": "trade",
+            "color": "green",
+            "title": f"Claude bought ${t.amount_usd:.2f} of {s.symbol} at ${s.entry_price:,.2f}",
+            "detail": (
+                f"Confidence {conf_pct}% · "
+                f"Stop-loss ${s.stop_loss:,.2f} · "
+                f"Take-profit ${s.take_profit:,.2f} · "
+                f"Risk: {s.risk_level}"
+            ),
+            "reasoning": s.reasoning[:500] if s.reasoning else None,
+            "symbol": s.symbol,
+            "entry_price": s.entry_price,
+            "take_profit": s.take_profit,
+            "stop_loss": s.stop_loss,
+            "confidence": s.confidence,
+        }
+
+    if hold_strats:
+        s = hold_strats[0]
+        conf_pct = round(s.confidence * 100)
+        return {
+            **base,
+            "type": "hold",
+            "color": "yellow",
+            "title": f"Claude analyzed {s.symbol} and decided to wait — no clear signal yet",
+            "detail": f"Confidence only {conf_pct}% — needs to be higher before placing a trade",
+            "reasoning": s.reasoning[:500] if s.reasoning else None,
+            "symbol": s.symbol,
+        }
+
+    if rejected_bt:
+        s = rejected_bt[0]
+        if s.backtest_return is not None and s.backtest_win_rate is not None:
+            detail = (
+                f"Backtest showed {s.backtest_return:.1f}% return "
+                f"with {s.backtest_win_rate * 100:.0f}% win rate — below the required threshold"
+            )
+        else:
+            detail = "The idea did not pass the historical performance test"
+        return {
+            **base,
+            "type": "rejected",
+            "color": "orange",
+            "title": f"Claude's {s.symbol} idea was tested and rejected — historical results too weak",
+            "detail": detail,
+            "reasoning": s.reasoning[:500] if s.reasoning else None,
+            "symbol": s.symbol,
+        }
+
+    return {
+        **base,
+        "type": "completed",
+        "color": "gray",
+        "title": f"Cycle completed — {run.strategies_generated} ideas analyzed, {run.trades_executed} trades placed",
+        "detail": None,
+        "reasoning": None,
+    }
+
+
+@app.get("/activity", tags=["data"])
+async def get_activity(limit: int = 20) -> dict:
+    """Plain-English summary of recent agent cycles — designed for non-traders."""
+    from datetime import timezone as _tz
+    from db.models import SessionLocal
+    from sqlalchemy import select as _select
+
+    runs = await list_agent_runs(limit=limit)
+    if not runs:
+        return {"count": 0, "items": []}
+
+    oldest_start = _ensure_aware(runs[-1].started_at)
+
+    async with SessionLocal() as session:
+        strat_rows = (await session.execute(
+            _select(Strategy)
+            .where(Strategy.created_at >= oldest_start)
+            .order_by(Strategy.created_at.asc())
+        )).scalars().all()
+
+        trade_rows = (await session.execute(
+            _select(Trade)
+            .where(Trade.executed_at >= oldest_start)
+            .order_by(Trade.executed_at.asc())
+        )).scalars().all()
+
+    def _aw(dt: datetime | None) -> datetime | None:
+        if dt is None:
+            return None
+        return dt if dt.tzinfo else dt.replace(tzinfo=_tz.utc)
+
+    items = []
+    for run in runs:
+        rs = _aw(run.started_at)
+        re = _aw(run.completed_at)
+
+        run_strats = [
+            s for s in strat_rows
+            if (sc := _aw(s.created_at)) and rs and sc >= rs and (re is None or sc <= re)
+        ]
+        run_trades = [
+            t for t in trade_rows
+            if (tc := _aw(t.executed_at)) and rs and tc >= rs and (re is None or tc <= re)
+        ]
+
+        items.append(_activity_item(run, run_strats, run_trades))
+
+    return {"count": len(items), "items": items}
+
+
 @app.post("/run", tags=["control"])
 async def manual_run() -> dict:
     """Manually trigger one agent cycle and wait for the result.

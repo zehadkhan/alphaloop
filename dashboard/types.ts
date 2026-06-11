@@ -74,6 +74,22 @@ export type CompetitionStatus = {
   initial_portfolio_usd: number;
 };
 
+export type ActivityItem = {
+  id: number;
+  time: string;
+  type: "trade" | "hold" | "rejected" | "skipped" | "error" | "running" | "completed";
+  color: "green" | "yellow" | "orange" | "red" | "gray" | "blue";
+  title: string;
+  detail: string | null;
+  reasoning: string | null;
+  duration_s?: number | null;
+  symbol?: string;
+  entry_price?: number;
+  take_profit?: number;
+  stop_loss?: number;
+  confidence?: number;
+};
+
 export type RunResult = {
   status: "executed" | "skipped" | "error";
   run_id?: number;

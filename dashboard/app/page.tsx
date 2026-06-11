@@ -7,11 +7,12 @@ import StatsRow from "@/components/StatsRow";
 import LatestStrategy from "@/components/LatestStrategy";
 import TradeHistory from "@/components/TradeHistory";
 import AgentRuns from "@/components/AgentRuns";
+import ActivityFeed from "@/components/ActivityFeed";
 import OpenPositions from "@/components/OpenPositions";
 import EquityCurve from "@/components/EquityCurve";
 import LiveChart from "@/components/LiveChart";
 import CompetitionPanel from "@/components/CompetitionPanel";
-import type { Health, AgentStatus, Trade, Strategy, AgentRun, RunResult, CompetitionStatus } from "@/types";
+import type { Health, AgentStatus, Trade, Strategy, AgentRun, RunResult, CompetitionStatus, ActivityItem } from "@/types";
 
 type Notification = {
   id: number;
@@ -69,6 +70,7 @@ export default function Dashboard() {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [runs, setRuns] = useState<AgentRun[]>([]);
+  const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -92,13 +94,14 @@ export default function Dashboard() {
   const fetchAll = useCallback(async (silent = false) => {
     if (!silent) setRefreshing(true);
     try {
-      const [h, s, t, st, r, comp] = await Promise.allSettled([
+      const [h, s, t, st, r, comp, act] = await Promise.allSettled([
         fetch("/api/proxy/health").then((r) => r.json()),
         fetch("/api/proxy/status").then((r) => r.json()),
         fetch("/api/proxy/trades?limit=50").then((r) => r.json()),
         fetch("/api/proxy/strategies?limit=20").then((r) => r.json()),
         fetch("/api/proxy/runs?limit=20").then((r) => r.json()),
         fetch("/api/proxy/competition").then((r) => r.json()),
+        fetch("/api/proxy/activity?limit=20").then((r) => r.json()),
       ]);
 
       if (h.status === "fulfilled") setHealth(h.value as Health);
@@ -109,6 +112,7 @@ export default function Dashboard() {
       if (comp.status === "fulfilled" && !(comp.value as { error?: string }).error) {
         setCompetition(comp.value as CompetitionStatus);
       }
+      if (act.status === "fulfilled") setActivity((act.value as { items: ActivityItem[] }).items ?? []);
 
       setLastRefresh(new Date());
     } catch {
@@ -225,6 +229,8 @@ export default function Dashboard() {
         )}
 
         <StatsRow trades={trades} runs={runs} />
+
+        <ActivityFeed items={activity} />
 
         {competition && <CompetitionPanel status={competition} />}
 
