@@ -459,7 +459,7 @@ def start_scheduler(interval_minutes: int = 30) -> None:
     )
     scheduler.add_job(
         monitor_open_trades,
-        trigger=IntervalTrigger(minutes=5),
+        trigger=IntervalTrigger(minutes=2),
         id="trade_monitor",
         replace_existing=True,
         max_instances=1,
