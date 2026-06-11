@@ -93,11 +93,12 @@ DATABASE_URL=sqlite+aiosqlite:///./storage/alphaloop.db
 │  APScheduler (every 30 min)                                     │
 │       │                                                         │
 │       ▼                                                         │
-│  TokenScanner ──▶ picks best token from 30 eligible tokens      │
-│       │                                                         │
+│  TokenScanner ──▶ ranks 30 competition-eligible BEP-20 tokens   │
+│       │           (ETH, CAKE, LINK, DOGE, SHIB, FET, INJ …)    │
 │       ▼                                                         │
 │  CMC Client ──▶ quote + OHLCV (daily + 4h)                      │
-│       │                                                         │
+│       │         ├─ standard Pro API (CMC_API_KEY)               │
+│       │         └─ Agent Hub MCP + x402 via TWAK (when set)     │
 │       ▼                                                         │
 │  Indicators ──▶ RSI, MACD, Bollinger Bands, SMA 20/50           │
 │       │                                                         │
@@ -267,7 +268,7 @@ AlphaLoop is a fully autonomous AI trading agent for BSC. Every 30 minutes it:
 3. Asks Claude AI (claude-sonnet-4-5) to generate a BUY / SELL / HOLD strategy with entry, stop-loss, and take-profit levels plus reasoning
 4. Walk-forward backtests the strategy (45-day in-sample + 15-day out-of-sample) and rejects it if it fails
 5. Executes the approved swap via the Trust Wallet Agent Kit (TWAK) REST API — self-custody, no CEX
-6. Monitors open positions every 5 minutes for TP/SL hits and force-closes stale trades
+6. Monitors open positions every 2 minutes for TP/SL hits and force-closes stale trades
 
 **Why AlphaLoop beats manual trading**
 
@@ -280,13 +281,14 @@ AlphaLoop is a fully autonomous AI trading agent for BSC. Every 30 minutes it:
 
 - All swaps go through `TWAKExecutor` → TWAK REST `POST /actions/swap`
 - On-chain registration via `twak compete register` on the competition contract
-- x402 micropayment support for CMC Agent Hub paid API calls
-- TWAK autonomous mode allowlist restricts execution to 30 competition-eligible tokens only
+- x402 micropayment support: CMC Agent Hub data requests are routed through `TWAKExecutor.x402_request()` — TWAK signs the micropayment natively, making TWAK the single execution layer for both data and trades
+- TWAK autonomous mode allowlist restricts execution to 30 competition-eligible BEP-20 tokens only (BNB excluded per competition rules)
 
 **CoinMarketCap Agent Hub integration**
 
 - `CMCClient` dynamically switches between the standard Pro API and the Agent Hub MCP endpoint (set `CMC_AGENT_HUB_URL`)
-- x402 payment header (`X-Payment`) is attached to Agent Hub requests when `X402_ENABLED=true`
+- When `TWAK_REST_URL + X402_ENABLED + CMC_AGENT_HUB_URL` are all configured, every CMC data request is routed through TWAK's native `x402_request` — no separate signing needed
+- Falls back to direct HTTP with `X-Payment` header if TWAK is not available
 - Supports `get_quote` and `get_market_metrics` via the Agent Hub MCP path
 
 **BNB AI Agent SDK integration**
