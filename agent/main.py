@@ -199,12 +199,13 @@ def _config_dict(c: BotConfig) -> dict:
         except Exception:
             tokens = None
     return {
-        "paused":             c.paused,
-        "position_size_usd":  c.position_size_usd,
-        "min_confidence":     c.min_confidence,
-        "claude_instruction": c.claude_instruction,
-        "eligible_tokens":    tokens,
-        "updated_at":         _fmt_dt(c.updated_at),
+        "paused":                    c.paused,
+        "position_size_usd":         c.position_size_usd,
+        "min_confidence":            c.min_confidence,
+        "claude_instruction":        c.claude_instruction,
+        "eligible_tokens":           tokens,
+        "monitor_interval_minutes":  c.monitor_interval_minutes,
+        "updated_at":                _fmt_dt(c.updated_at),
     }
 
 
@@ -492,9 +493,24 @@ async def admin_update_config(body: dict) -> dict:
     if "eligible_tokens" in body:
         v = body["eligible_tokens"]
         updates["eligible_tokens_json"] = _json.dumps(v) if v else None
+    if "monitor_interval_minutes" in body:
+        v = body["monitor_interval_minutes"]
+        updates["monitor_interval_minutes"] = int(v) if v is not None else None
 
     cfg = await update_bot_config(**updates)
     logger.info("Admin config updated: %s", updates)
+
+    # Reschedule the trade monitor job if interval changed
+    if "monitor_interval_minutes" in updates:
+        from agent.scheduler import scheduler
+        from apscheduler.triggers.interval import IntervalTrigger
+        new_mins = updates["monitor_interval_minutes"] or 2
+        scheduler.reschedule_job(
+            "trade_monitor",
+            trigger=IntervalTrigger(minutes=new_mins),
+        )
+        logger.info("Trade monitor rescheduled to every %d min", new_mins)
+
     return _config_dict(cfg)
 
 

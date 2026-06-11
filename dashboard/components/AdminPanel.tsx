@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Pause, Play, X, Save, AlertTriangle, Settings, Brain, DollarSign, Target, Zap } from "lucide-react";
+import { Pause, Play, X, Save, AlertTriangle, Settings, Brain, DollarSign, Target, Zap, Timer } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import type { BotConfig } from "@/types";
 
@@ -26,6 +26,7 @@ export default function AdminPanel({ config, onUpdate }: Props) {
   const [minConf, setMinConf] = useState<number>(60);
   const [instruction, setInstruction] = useState<string>("");
   const [tokens, setTokens] = useState<string[]>(["BNB"]);
+  const [monitorInterval, setMonitorInterval] = useState<number>(2);
 
   useEffect(() => {
     if (config) {
@@ -33,6 +34,7 @@ export default function AdminPanel({ config, onUpdate }: Props) {
       setMinConf(Math.round((config.min_confidence ?? 0.6) * 100));
       setInstruction(config.claude_instruction ?? "");
       setTokens(config.eligible_tokens ?? ["BNB"]);
+      setMonitorInterval(config.monitor_interval_minutes ?? 2);
     }
   }, [config]);
 
@@ -47,6 +49,7 @@ export default function AdminPanel({ config, onUpdate }: Props) {
           min_confidence: minConf / 100,
           claude_instruction: instruction || null,
           eligible_tokens: tokens,
+          monitor_interval_minutes: monitorInterval,
         }),
       });
       setSaved(true);
@@ -204,6 +207,34 @@ export default function AdminPanel({ config, onUpdate }: Props) {
                     : minConf >= 75
                     ? "Fewer trades, more selective"
                     : "Balanced — recommended"}
+                </p>
+              </section>
+
+              {/* Monitor Interval */}
+              <section>
+                <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                  <Timer size={12} /> Price Check Interval
+                </h3>
+                <div className="flex items-center gap-3">
+                  <input
+                    type="range"
+                    min={1}
+                    max={10}
+                    step={1}
+                    value={monitorInterval}
+                    onChange={(e) => setMonitorInterval(Number(e.target.value))}
+                    className="flex-1 accent-accent"
+                  />
+                  <span className="text-sm font-semibold text-text-primary w-16 text-right">
+                    {monitorInterval} min
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-text-muted">
+                  {monitorInterval === 1
+                    ? "Every minute — fastest response to price drops"
+                    : monitorInterval <= 3
+                    ? `Every ${monitorInterval} min — good balance`
+                    : `Every ${monitorInterval} min — slower but less API usage`}
                 </p>
               </section>
 

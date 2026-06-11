@@ -96,6 +96,7 @@ export type BotConfig = {
   min_confidence: number | null;
   claude_instruction: string | null;
   eligible_tokens: string[] | null;
+  monitor_interval_minutes: number | null;
   updated_at: string | null;
 };
 

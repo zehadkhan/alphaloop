@@ -120,6 +120,7 @@ class BotConfig(Base):
     min_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     claude_instruction: Mapped[str | None] = mapped_column(Text, nullable=True)
     eligible_tokens_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    monitor_interval_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
