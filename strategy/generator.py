@@ -126,6 +126,7 @@ class StrategyGenerator:
         market_data: dict,
         indicators: dict,
         indicators_4h: dict | None = None,
+        extra_instruction: str | None = None,
     ) -> dict:
         """Call Claude and return a validated strategy dict.
 
@@ -134,7 +135,7 @@ class StrategyGenerator:
             action != HOLD and confidence >= CONFIDENCE_THRESHOLD.
         """
         pair   = market_data.get("symbol", symbol) + "/USDT"
-        prompt = self._build_prompt(pair, market_data, indicators, indicators_4h)
+        prompt = self._build_prompt(pair, market_data, indicators, indicators_4h, extra_instruction)
         raw    = await self._call_claude(prompt)
         strategy = self._parse_and_validate(raw)
         strategy["should_execute"] = (
@@ -162,6 +163,7 @@ class StrategyGenerator:
         market_data: dict,
         indicators: dict,
         indicators_4h: dict | None = None,
+        extra_instruction: str | None = None,
     ) -> str:
         price = market_data.get("price", 0.0)
 
@@ -196,7 +198,7 @@ class StrategyGenerator:
         else:
             indicators_4h_section = "\n- (not available this cycle)"
 
-        return _USER_PROMPT_TEMPLATE.format(
+        base_prompt = _USER_PROMPT_TEMPLATE.format(
             pair=pair,
             price=price,
             volume_24h=market_data.get("volume_24h", 0.0),
@@ -221,6 +223,9 @@ class StrategyGenerator:
             sell_tp=sell_tp,
             indicators_4h_section=indicators_4h_section,
         )
+        if extra_instruction:
+            base_prompt += f"\n\n## Admin Instructions (MUST follow)\n{extra_instruction}\n"
+        return base_prompt
 
     async def _call_claude(self, user_prompt: str) -> str:
         try:

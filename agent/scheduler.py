@@ -30,6 +30,7 @@ from db.models import (
     get_today_pnl,
     get_daily_trade_count,
     get_last_trade_time,
+    get_bot_config,
 )
 
 logger = logging.getLogger(__name__)
@@ -155,6 +156,16 @@ async def run_agent_cycle() -> dict:
 
 async def _run_cycle_impl() -> dict:
     quote = "USDT"
+
+    # ── Read runtime admin config overrides ───────────────────────────────
+    bot_cfg = await get_bot_config()
+    if bot_cfg.paused:
+        logger.info("Bot is PAUSED by admin — skipping cycle")
+        return {"status": "skipped", "reason": "admin_paused"}
+
+    _pos_size_usd = bot_cfg.position_size_usd or config.MAX_POSITION_SIZE_USD
+    _min_conf     = bot_cfg.min_confidence    or config.MIN_CONFIDENCE
+    _claude_instr = bot_cfg.claude_instruction or None
 
     # ── Token selection: scan eligible tokens and pick best momentum ──────
     if config.COMPETITION_MODE and len(config.ELIGIBLE_TOKENS) > 1:
@@ -282,7 +293,7 @@ async def _run_cycle_impl() -> dict:
         # ── 3. Generate strategy via LLM ──────────────────────────────────
         logger.info("[3/6] Generating strategy via Claude (Anthropic)…")
         async with StrategyGenerator() as gen:
-            strategy = await gen.generate(symbol, market_data, indicators, indicators_4h)
+            strategy = await gen.generate(symbol, market_data, indicators, indicators_4h, _claude_instr)
 
         strategies_generated = 1
         logger.info(
@@ -305,7 +316,7 @@ async def _run_cycle_impl() -> dict:
             strategy["action"] = "BUY"
             logger.warning("[Competition] Overriding HOLD → BUY to guarantee daily trade")
 
-        min_confidence = 0.3 if _force_execute else config.MIN_CONFIDENCE
+        min_confidence = 0.3 if _force_execute else _min_conf
         if strategy["confidence"] < min_confidence:
             logger.info(
                 "Confidence %.2f < %.2f threshold — skipping",
@@ -367,11 +378,11 @@ async def _run_cycle_impl() -> dict:
 
         # Scale position by confidence: 50–100% of MAX_POSITION_SIZE_USD
         position_usd = round(
-            config.MAX_POSITION_SIZE_USD * max(0.5, min(1.0, strategy["confidence"])), 2
+            _pos_size_usd * max(0.5, min(1.0, strategy["confidence"])), 2
         )
         logger.info(
             "Position sizing: confidence=%.2f → $%.2f (max $%.2f)",
-            strategy["confidence"], position_usd, config.MAX_POSITION_SIZE_USD,
+            strategy["confidence"], position_usd, _pos_size_usd,
         )
 
         swap = await executor.swap(token_in, token_out, position_usd)

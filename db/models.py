@@ -111,6 +111,18 @@ class AgentRun(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
+class BotConfig(Base):
+    __tablename__ = "bot_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    paused: Mapped[bool] = mapped_column(default=False)
+    position_size_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    min_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    claude_instruction: Mapped[str | None] = mapped_column(Text, nullable=True)
+    eligible_tokens_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
+
+
 # ---------------------------------------------------------------------------
 # Schema initialisation
 # ---------------------------------------------------------------------------
@@ -384,6 +396,37 @@ async def complete_agent_run(
             "Completed agent_run id=%d strategies=%d trades=%d pnl=%.2f",
             run_id, strategies_generated, trades_executed, total_pnl,
         )
+
+
+# ---------------------------------------------------------------------------
+# BotConfig CRUD
+# ---------------------------------------------------------------------------
+
+async def get_bot_config() -> BotConfig:
+    """Return the singleton BotConfig row, creating it with defaults if absent."""
+    async with SessionLocal() as session:
+        row = await session.get(BotConfig, 1)
+        if row is None:
+            row = BotConfig(id=1)
+            session.add(row)
+            await session.commit()
+            await session.refresh(row)
+        return row
+
+
+async def update_bot_config(**kwargs) -> BotConfig:
+    """Update one or more fields of the singleton BotConfig row."""
+    async with SessionLocal() as session:
+        row = await session.get(BotConfig, 1)
+        if row is None:
+            row = BotConfig(id=1)
+            session.add(row)
+        for k, v in kwargs.items():
+            setattr(row, k, v)
+        row.updated_at = _now()
+        await session.commit()
+        await session.refresh(row)
+        return row
 
 
 # ---------------------------------------------------------------------------

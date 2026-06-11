@@ -8,11 +8,12 @@ import LatestStrategy from "@/components/LatestStrategy";
 import TradeHistory from "@/components/TradeHistory";
 import AgentRuns from "@/components/AgentRuns";
 import ActivityFeed from "@/components/ActivityFeed";
+import AdminPanel from "@/components/AdminPanel";
 import OpenPositions from "@/components/OpenPositions";
 import EquityCurve from "@/components/EquityCurve";
 import LiveChart from "@/components/LiveChart";
 import CompetitionPanel from "@/components/CompetitionPanel";
-import type { Health, AgentStatus, Trade, Strategy, AgentRun, RunResult, CompetitionStatus, ActivityItem } from "@/types";
+import type { Health, AgentStatus, Trade, Strategy, AgentRun, RunResult, CompetitionStatus, ActivityItem, BotConfig } from "@/types";
 
 type Notification = {
   id: number;
@@ -71,6 +72,7 @@ export default function Dashboard() {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [runs, setRuns] = useState<AgentRun[]>([]);
   const [activity, setActivity] = useState<ActivityItem[]>([]);
+  const [botConfig, setBotConfig] = useState<BotConfig | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -94,7 +96,7 @@ export default function Dashboard() {
   const fetchAll = useCallback(async (silent = false) => {
     if (!silent) setRefreshing(true);
     try {
-      const [h, s, t, st, r, comp, act] = await Promise.allSettled([
+      const [h, s, t, st, r, comp, act, cfg] = await Promise.allSettled([
         fetch("/api/proxy/health").then((r) => r.json()),
         fetch("/api/proxy/status").then((r) => r.json()),
         fetch("/api/proxy/trades?limit=50").then((r) => r.json()),
@@ -102,6 +104,7 @@ export default function Dashboard() {
         fetch("/api/proxy/runs?limit=20").then((r) => r.json()),
         fetch("/api/proxy/competition").then((r) => r.json()),
         fetch("/api/proxy/activity?limit=20").then((r) => r.json()),
+        fetch("/api/proxy/admin/config").then((r) => r.json()),
       ]);
 
       if (h.status === "fulfilled") setHealth(h.value as Health);
@@ -113,6 +116,9 @@ export default function Dashboard() {
         setCompetition(comp.value as CompetitionStatus);
       }
       if (act.status === "fulfilled") setActivity((act.value as { items: ActivityItem[] }).items ?? []);
+      if (cfg.status === "fulfilled" && !(cfg.value as { error?: string }).error) {
+        setBotConfig(cfg.value as BotConfig);
+      }
 
       setLastRefresh(new Date());
     } catch {
@@ -281,6 +287,8 @@ export default function Dashboard() {
           </span>
         </div>
       </footer>
+
+      <AdminPanel config={botConfig} onUpdate={() => fetchAll(true)} />
     </div>
   );
 }

@@ -38,6 +38,7 @@ from agent.config import config
 from agent.scheduler import run_agent_cycle, monitor_open_trades, start_scheduler, stop_scheduler
 from db.models import (
     AgentRun,
+    BotConfig,
     Strategy,
     Trade,
     init_db,
@@ -45,6 +46,8 @@ from db.models import (
     list_strategies,
     list_trades,
     list_open_buy_trades,
+    get_bot_config,
+    update_bot_config,
 )
 
 # ---------------------------------------------------------------------------
@@ -184,6 +187,24 @@ def _run_dict(r: AgentRun) -> dict:
         "trades_executed":       r.trades_executed,
         "total_pnl":             r.total_pnl,
         "error_message":         r.error_message,
+    }
+
+
+def _config_dict(c: BotConfig) -> dict:
+    import json as _json
+    tokens = None
+    if c.eligible_tokens_json:
+        try:
+            tokens = _json.loads(c.eligible_tokens_json)
+        except Exception:
+            tokens = None
+    return {
+        "paused":             c.paused,
+        "position_size_usd":  c.position_size_usd,
+        "min_confidence":     c.min_confidence,
+        "claude_instruction": c.claude_instruction,
+        "eligible_tokens":    tokens,
+        "updated_at":         _fmt_dt(c.updated_at),
     }
 
 
@@ -438,6 +459,87 @@ async def manual_monitor() -> dict:
     logger.info("Manual /monitor triggered")
     result = await monitor_open_trades()
     return JSONResponse(content=result, status_code=200)
+
+
+@app.get("/admin/config", tags=["admin"])
+async def admin_get_config() -> dict:
+    """Return current runtime bot configuration."""
+    cfg = await get_bot_config()
+    return _config_dict(cfg)
+
+
+@app.post("/admin/config", tags=["admin"])
+async def admin_update_config(body: dict) -> dict:
+    """Update runtime bot configuration. Send only the fields you want to change.
+
+    Accepted fields: paused, position_size_usd, min_confidence,
+    claude_instruction, eligible_tokens (list of strings).
+    """
+    import json as _json
+    updates: dict = {}
+
+    if "paused" in body:
+        updates["paused"] = bool(body["paused"])
+    if "position_size_usd" in body:
+        v = body["position_size_usd"]
+        updates["position_size_usd"] = float(v) if v is not None else None
+    if "min_confidence" in body:
+        v = body["min_confidence"]
+        updates["min_confidence"] = float(v) if v is not None else None
+    if "claude_instruction" in body:
+        v = body["claude_instruction"]
+        updates["claude_instruction"] = str(v).strip() if v else None
+    if "eligible_tokens" in body:
+        v = body["eligible_tokens"]
+        updates["eligible_tokens_json"] = _json.dumps(v) if v else None
+
+    cfg = await update_bot_config(**updates)
+    logger.info("Admin config updated: %s", updates)
+    return _config_dict(cfg)
+
+
+@app.post("/admin/pause", tags=["admin"])
+async def admin_toggle_pause() -> dict:
+    """Toggle the bot pause state."""
+    cfg = await get_bot_config()
+    new_state = not cfg.paused
+    cfg = await update_bot_config(paused=new_state)
+    logger.info("Admin: bot %s", "PAUSED" if new_state else "RESUMED")
+    return {"paused": new_state, "message": "Bot paused" if new_state else "Bot resumed"}
+
+
+@app.post("/admin/close-all", tags=["admin"])
+async def admin_close_all() -> dict:
+    """Emergency: close all open positions at current market price."""
+    from agent.scheduler import _get_token_price
+    open_trades = await list_open_buy_trades()
+    if not open_trades:
+        return {"closed": 0, "message": "No open positions"}
+
+    closed = 0
+    errors = []
+    for trade in open_trades:
+        try:
+            price = await _get_token_price(trade.symbol)
+            if price is None:
+                errors.append(f"trade {trade.id}: price unavailable")
+                continue
+            from db.models import close_trade as _close_trade
+            pnl_usd = (price / trade.entry_price - 1) * trade.amount_usd
+            pnl_pct = (price / trade.entry_price - 1) * 100
+            await _close_trade(
+                trade.id,
+                exit_price=round(price, 4),
+                pnl_usd=round(pnl_usd, 4),
+                pnl_percent=round(pnl_pct, 4),
+            )
+            closed += 1
+            logger.info("Admin close-all: closed trade %d %s pnl=%+.2f%%",
+                        trade.id, trade.symbol, pnl_pct)
+        except Exception as exc:
+            errors.append(f"trade {trade.id}: {exc}")
+
+    return {"closed": closed, "total": len(open_trades), "errors": errors}
 
 
 @app.get("/competition/status", tags=["competition"])

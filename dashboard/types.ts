@@ -90,6 +90,15 @@ export type ActivityItem = {
   confidence?: number;
 };
 
+export type BotConfig = {
+  paused: boolean;
+  position_size_usd: number | null;
+  min_confidence: number | null;
+  claude_instruction: string | null;
+  eligible_tokens: string[] | null;
+  updated_at: string | null;
+};
+
 export type RunResult = {
   status: "executed" | "skipped" | "error";
   run_id?: number;
