@@ -13,6 +13,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    func,
     select,
     update,
 )
@@ -21,7 +22,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, selectinload
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +230,21 @@ async def list_trades(
         return result.scalars().all()
 
 
+async def list_open_buy_trades() -> Sequence[Trade]:
+    """Return all BUY trades that have not been closed yet."""
+    async with SessionLocal() as session:
+        q = (
+            select(Trade)
+            .options(selectinload(Trade.strategy))
+            .where(Trade.action == "BUY")
+            .where(Trade.closed_at.is_(None))
+            .where(Trade.status.in_(["dry_run", "executed"]))
+            .order_by(Trade.executed_at.asc())
+        )
+        result = await session.execute(q)
+        return result.scalars().all()
+
+
 async def close_trade(
     trade_id: int,
     *,
@@ -252,6 +268,57 @@ async def close_trade(
         )
         await session.commit()
         logger.debug("Closed trade id=%d pnl_usd=%.2f", trade_id, pnl_usd)
+
+
+async def get_today_pnl() -> float:
+    """Sum of pnl_usd from trades closed since UTC midnight today."""
+    from datetime import date
+    today_utc = datetime.combine(date.today(), datetime.min.time()).replace(tzinfo=timezone.utc)
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(func.sum(Trade.pnl_usd))
+            .where(Trade.closed_at >= today_utc)
+            .where(Trade.pnl_usd.isnot(None))
+        )
+        total = result.scalar()
+        return float(total) if total is not None else 0.0
+
+
+async def get_last_trade_time() -> datetime | None:
+    """Return the executed_at timestamp of the most recent executed trade."""
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(Trade.executed_at)
+            .where(Trade.status.in_(["dry_run", "executed"]))
+            .order_by(Trade.executed_at.desc())
+            .limit(1)
+        )
+        row = result.scalar()
+        return row
+
+
+async def get_daily_trade_count() -> int:
+    """Number of trades executed (opened) since UTC midnight today."""
+    from datetime import date
+    today_utc = datetime.combine(date.today(), datetime.min.time()).replace(tzinfo=timezone.utc)
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(func.count(Trade.id))
+            .where(Trade.executed_at >= today_utc)
+            .where(Trade.status.in_(["dry_run", "executed"]))
+        )
+        count = result.scalar()
+        return int(count) if count is not None else 0
+
+
+async def get_peak_portfolio_value() -> float:
+    """Return the highest cumulative pnl seen (used for drawdown calculation)."""
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(func.sum(Trade.pnl_usd)).where(Trade.pnl_usd.isnot(None))
+        )
+        total = result.scalar()
+        return float(total) if total is not None else 0.0
 
 
 async def fail_trade(trade_id: int, *, tx_hash: str | None = None) -> None:

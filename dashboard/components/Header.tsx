@@ -1,9 +1,10 @@
 "use client";
 
-import { RefreshCw, Zap, Activity } from "lucide-react";
+import { RefreshCw, Zap, Activity, ScanLine } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { formatPrice, timeAgo } from "@/lib/utils";
+import ThemeToggle from "@/components/ThemeToggle";
+import { formatPrice, timeAgo, timeUntil } from "@/lib/utils";
 import type { Health, AgentStatus } from "@/types";
 
 type Props = {
@@ -11,14 +12,19 @@ type Props = {
   status: AgentStatus | null;
   lastRefresh: Date;
   running: boolean;
+  monitoring: boolean;
   onRunNow: () => void;
+  onMonitor: () => void;
 };
 
-export default function Header({ health, status, lastRefresh, running, onRunNow }: Props) {
+export default function Header({ health, status, lastRefresh, running, monitoring, onRunNow, onMonitor }: Props) {
   const isAlive = health?.status === "ok";
   const bnbPrice = health?.bnb_price;
   const isDryRun = status?.dry_run ?? true;
-  const nextJob = status?.scheduled_jobs?.[0]?.next_run;
+  const isTWAK = status?.signing_backend === "twak";
+  const isCompetition = status?.competition_mode ?? false;
+  const nextJob = status?.scheduled_jobs?.find((j) => j.id === "agent_cycle")?.next_run;
+  const openPositions = status?.open_positions ?? 0;
 
   return (
     <header className="sticky top-0 z-40 border-b border-border-subtle bg-background/95 backdrop-blur-sm">
@@ -34,6 +40,12 @@ export default function Header({ health, status, lastRefresh, running, onRunNow 
           </div>
           {isDryRun && (
             <Badge variant="dry_run" className="text-[10px]">DRY RUN</Badge>
+          )}
+          {isTWAK && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded border border-accent/40 text-accent font-semibold">TWAK</span>
+          )}
+          {isCompetition && !isDryRun && (
+            <span className="text-[10px] px-1.5 py-0.5 rounded border border-profit/40 text-profit font-semibold">LIVE</span>
           )}
         </div>
 
@@ -62,7 +74,9 @@ export default function Header({ health, status, lastRefresh, running, onRunNow 
 
         {/* Right — refresh info + CTA */}
         <div className="flex items-center gap-3 shrink-0">
-          <div className="hidden md:flex flex-col items-end">
+          <ThemeToggle />
+
+        <div className="hidden md:flex flex-col items-end">
             <span className="text-[10px] text-text-muted">Last refresh</span>
             <span className="text-xs text-text-secondary tabular-nums">
               {timeAgo(lastRefresh.toISOString())}
@@ -73,9 +87,25 @@ export default function Header({ health, status, lastRefresh, running, onRunNow 
             <div className="hidden lg:flex flex-col items-end">
               <span className="text-[10px] text-text-muted">Next run</span>
               <span className="text-xs text-text-secondary tabular-nums">
-                {timeAgo(nextJob)}
+                {timeUntil(nextJob)}
               </span>
             </div>
+          )}
+
+          {openPositions > 0 && (
+            <button
+              onClick={onMonitor}
+              disabled={monitoring}
+              title="Check open positions against TP/SL"
+              className="hidden sm:flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border border-border-subtle bg-surface-2 text-text-secondary hover:text-profit hover:border-profit/40 transition-all disabled:opacity-50"
+            >
+              {monitoring ? (
+                <RefreshCw size={12} className="animate-spin" />
+              ) : (
+                <ScanLine size={12} />
+              )}
+              {openPositions} open
+            </button>
           )}
 
           <Button

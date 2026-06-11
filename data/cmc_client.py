@@ -13,13 +13,26 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-CMC_BASE    = "https://pro-api.coinmarketcap.com"
 BINANCE_BASE = "https://api.binance.com"
 _DEFAULT_CONVERT = "USD"
+
+# CMC endpoint: standard Pro API or Agent Hub MCP (set CMC_AGENT_HUB_URL to switch)
+_AGENT_HUB_URL = os.getenv("CMC_AGENT_HUB_URL", "")
+CMC_BASE = _AGENT_HUB_URL.rstrip("/") if _AGENT_HUB_URL else "https://pro-api.coinmarketcap.com"
+
+# Route mapping: Agent Hub uses different path prefixes
+_USE_AGENT_HUB = bool(_AGENT_HUB_URL)
+_QUOTE_PATH    = "/agent/v1/cryptocurrency/quotes/latest" if _USE_AGENT_HUB else "/v1/cryptocurrency/quotes/latest"
+_METRICS_PATH  = "/agent/v1/global-metrics/quotes/latest" if _USE_AGENT_HUB else "/v1/global-metrics/quotes/latest"
+
+# x402 micropayment support — enabled when CMC Agent Hub access is configured
+_X402_ENABLED   = os.getenv("X402_ENABLED", "false").lower() == "true"
+_X402_RECIPIENT = os.getenv("X402_RECIPIENT", "")  # CMC Agent Hub payment address
 
 # Maps the time_period strings used across the codebase to Binance interval codes
 _BINANCE_INTERVALS: dict[str, str] = {
     "hourly":  "1h",
+    "4h":      "4h",
     "daily":   "1d",
     "weekly":  "1w",
     "monthly": "1M",
@@ -60,10 +73,45 @@ class CMCClient:
     # CMC helpers
     # ------------------------------------------------------------------
 
+    async def _make_x402_payment(self, endpoint: str) -> dict | None:
+        """Sign an x402 payment for a CMC Agent Hub request.
+
+        Returns the payment header dict, or None if x402 is disabled or fails.
+        The BNBWallet is loaded lazily to avoid circular imports.
+        """
+        if not _X402_ENABLED or not _X402_RECIPIENT:
+            return None
+        try:
+            from execution.bnb_wallet import BNBWallet
+            wallet = BNBWallet()
+            domain  = {"name": "CMC Agent Hub", "version": "1", "chainId": 56}
+            types   = {"Payment": [
+                {"name": "to",     "type": "address"},
+                {"name": "amount", "type": "uint256"},
+                {"name": "nonce",  "type": "uint256"},
+            ]}
+            import time
+            message = {"to": _X402_RECIPIENT, "amount": 1, "nonce": int(time.time())}
+            sig = wallet.sign_x402_payment(domain, types, message, expected_to=_X402_RECIPIENT)
+            logger.info("[x402] Payment signed for %s  sig=%s…", endpoint, str(sig)[:24])
+            return sig
+        except Exception as exc:
+            logger.warning("[x402] Payment signing failed: %s", exc)
+            return None
+
     async def _cmc_get(self, path: str, params: dict) -> dict:
         logger.debug("CMC GET %s params=%s", path, params)
+
+        # Attach x402 payment header if Agent Hub mode is active
+        extra_headers: dict = {}
+        if _X402_ENABLED:
+            payment = await self._make_x402_payment(path)
+            if payment:
+                import json
+                extra_headers["X-Payment"] = json.dumps(payment)
+
         try:
-            resp = await self._cmc.get(path, params=params)
+            resp = await self._cmc.get(path, params=params, headers=extra_headers)
         except httpx.TransportError as exc:
             logger.error("Network error calling CMC %s: %s", path, exc)
             raise
@@ -93,7 +141,7 @@ class CMCClient:
              percent_change_24h, market_cap}
         """
         payload = await self._cmc_get(
-            "/v1/cryptocurrency/quotes/latest",
+            _QUOTE_PATH,
             params={"symbol": symbol.upper(), "convert": _DEFAULT_CONVERT},
         )
 
@@ -174,7 +222,7 @@ class CMCClient:
             {total_market_cap, btc_dominance, active_cryptocurrencies}
         """
         payload = await self._cmc_get(
-            "/v1/global-metrics/quotes/latest",
+            _METRICS_PATH,
             params={"convert": _DEFAULT_CONVERT},
         )
 

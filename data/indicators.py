@@ -29,6 +29,38 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def extract_4h_context(df: pd.DataFrame) -> dict:
+    """Return a compact 4h indicator snapshot for the strategy prompt.
+
+    Requires a DataFrame already processed by compute_indicators().
+    Only the fields most useful for entry-timing on the 4h frame are returned.
+    """
+    last = df.iloc[-1]
+    close = float(last["close"])
+
+    def _f(col: str, fallback: float = 0.0) -> float:
+        try:
+            v = float(last[col])
+            return v if not math.isnan(v) else fallback
+        except (KeyError, TypeError, ValueError):
+            return fallback
+
+    rsi        = _f("rsi",        50.0)
+    macd_hist  = _f("macd_hist",   0.0)
+    sma_20     = _f("sma_20",     close)
+    trend      = "bullish" if close > sma_20 else "bearish"
+    rsi_state  = "overbought" if rsi > 65 else ("oversold" if rsi < 35 else "neutral")
+
+    return {
+        "rsi":       round(rsi, 2),
+        "rsi_state": rsi_state,
+        "macd_hist": round(macd_hist, 6),
+        "sma_20":    round(sma_20, 4),
+        "trend":     trend,
+        "close":     round(close, 4),
+    }
+
+
 def extract_last_row(df: pd.DataFrame) -> dict:
     """Return the most recent indicator values as a plain float dict.
 

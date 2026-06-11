@@ -8,18 +8,25 @@ services:
       - "8000:8000"
     volumes:
       - ./storage:/app/storage
-    environment:
-      - DATABASE_URL=sqlite+aiosqlite:////app/storage/alphaloop.db
     env_file:
       - .env
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:////app/storage/alphaloop.db
+      # When TWAK runs on the host, containers reach it via host.docker.internal.
+      # If TWAK_REST_URL in .env is http://localhost:7777, override it here:
+      - TWAK_REST_URL=${TWAK_REST_URL:-http://host.docker.internal:7777}
+      # Use system CA bundle — avoids certifi file corruption on full disks
+      - SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+      - REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
     restart: unless-stopped
-    command: uvicorn agent.main:app --host 0.0.0.0 --port 8000
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # Linux support (no-op on Mac)
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 15s
+      start_period: 20s
 
   dashboard:
     build:

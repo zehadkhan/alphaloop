@@ -1,8 +1,18 @@
 .env
 *.db
 storage/*.db
+storage/*.log
 .venv/
 __pycache__/
 *.pyc
 *.pyo
 .DS_Store
+
+# Dashboard build artifacts
+dashboard/node_modules/
+dashboard/.next/
+dashboard/tsconfig.tsbuildinfo
+dashboard/.env.local
+
+# Claude metadata
+.claude/

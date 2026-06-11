@@ -25,14 +25,14 @@ _SYSTEM_PROMPT = (
 _USER_PROMPT_TEMPLATE = """\
 Analyze the following market data for {pair} and produce a trading strategy.
 
-## Market Data
+## Market Data (Daily timeframe)
 - Current price : {price}
 - 24 h volume   : {volume_24h}
 - Market cap    : {market_cap}
 - 1 h change    : {percent_change_1h:.2f}%
 - 24 h change   : {percent_change_24h:.2f}%
 
-## Technical Indicators
+## Technical Indicators — Daily
 - RSI (14)           : {rsi:.2f}
 - MACD               : {macd:.6f}
 - MACD signal        : {macd_signal:.6f}
@@ -42,6 +42,8 @@ Analyze the following market data for {pair} and produce a trading strategy.
 - Bollinger lower    : {bb_lower:.4f}
 - SMA 20             : {sma_20:.4f}
 - SMA 50             : {sma_50:.4f}
+
+## Technical Indicators — 4h (entry timing){indicators_4h_section}
 
 ## Market Conditions
 - Trading pair       : {pair}
@@ -75,6 +77,8 @@ For SELL action (current price ≈ {price:.2f}):
 
 For HOLD action: entry_price, stop_loss, take_profit = current price (placeholder only).
 Risk/reward must be ≥ 1.5 (tp_distance / sl_distance ≥ 1.5).
+Use the 4h trend and RSI to refine entry timing: prefer BUY when 4h is oversold/bullish,
+prefer SELL when 4h is overbought/bearish. Raise confidence when daily and 4h signals align.
 """
 
 _REQUIRED_FIELDS: dict[str, type | tuple[type, ...]] = {
@@ -121,6 +125,7 @@ class StrategyGenerator:
         symbol: str,
         market_data: dict,
         indicators: dict,
+        indicators_4h: dict | None = None,
     ) -> dict:
         """Call Claude and return a validated strategy dict.
 
@@ -129,7 +134,7 @@ class StrategyGenerator:
             action != HOLD and confidence >= CONFIDENCE_THRESHOLD.
         """
         pair   = market_data.get("symbol", symbol) + "/USDT"
-        prompt = self._build_prompt(pair, market_data, indicators)
+        prompt = self._build_prompt(pair, market_data, indicators, indicators_4h)
         raw    = await self._call_claude(prompt)
         strategy = self._parse_and_validate(raw)
         strategy["should_execute"] = (
@@ -151,7 +156,13 @@ class StrategyGenerator:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _build_prompt(self, pair: str, market_data: dict, indicators: dict) -> str:
+    def _build_prompt(
+        self,
+        pair: str,
+        market_data: dict,
+        indicators: dict,
+        indicators_4h: dict | None = None,
+    ) -> str:
         price = market_data.get("price", 0.0)
 
         rsi = indicators.get("rsi", 50.0)
@@ -173,6 +184,17 @@ class StrategyGenerator:
         sell_entry = price * 1.01
         sell_sl    = sell_entry * 1.04
         sell_tp    = sell_entry * 0.93
+
+        # Build 4h section string if data is available
+        if indicators_4h:
+            indicators_4h_section = (
+                f"\n- RSI (14)           : {indicators_4h['rsi']:.2f} ({indicators_4h['rsi_state']})"
+                f"\n- MACD histogram     : {indicators_4h['macd_hist']:.6f}"
+                f"\n- SMA 20             : {indicators_4h['sma_20']:.4f}"
+                f"\n- 4h trend           : {indicators_4h['trend']} (price {'above' if indicators_4h['trend'] == 'bullish' else 'below'} SMA-20)"
+            )
+        else:
+            indicators_4h_section = "\n- (not available this cycle)"
 
         return _USER_PROMPT_TEMPLATE.format(
             pair=pair,
@@ -197,6 +219,7 @@ class StrategyGenerator:
             sell_entry=sell_entry,
             sell_sl=sell_sl,
             sell_tp=sell_tp,
+            indicators_4h_section=indicators_4h_section,
         )
 
     async def _call_claude(self, user_prompt: str) -> str:

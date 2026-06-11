@@ -7,7 +7,11 @@ import StatsRow from "@/components/StatsRow";
 import LatestStrategy from "@/components/LatestStrategy";
 import TradeHistory from "@/components/TradeHistory";
 import AgentRuns from "@/components/AgentRuns";
-import type { Health, AgentStatus, Trade, Strategy, AgentRun, RunResult } from "@/types";
+import OpenPositions from "@/components/OpenPositions";
+import EquityCurve from "@/components/EquityCurve";
+import LiveChart from "@/components/LiveChart";
+import CompetitionPanel from "@/components/CompetitionPanel";
+import type { Health, AgentStatus, Trade, Strategy, AgentRun, RunResult, CompetitionStatus } from "@/types";
 
 type Notification = {
   id: number;
@@ -69,7 +73,9 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [running, setRunning] = useState(false);
+  const [monitoring, setMonitoring] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [competition, setCompetition] = useState<CompetitionStatus | null>(null);
 
   const addNotif = useCallback(
     (type: Notification["type"], title: string, message: string) => {
@@ -86,12 +92,13 @@ export default function Dashboard() {
   const fetchAll = useCallback(async (silent = false) => {
     if (!silent) setRefreshing(true);
     try {
-      const [h, s, t, st, r] = await Promise.allSettled([
+      const [h, s, t, st, r, comp] = await Promise.allSettled([
         fetch("/api/proxy/health").then((r) => r.json()),
         fetch("/api/proxy/status").then((r) => r.json()),
         fetch("/api/proxy/trades?limit=50").then((r) => r.json()),
         fetch("/api/proxy/strategies?limit=20").then((r) => r.json()),
         fetch("/api/proxy/runs?limit=20").then((r) => r.json()),
+        fetch("/api/proxy/competition").then((r) => r.json()),
       ]);
 
       if (h.status === "fulfilled") setHealth(h.value as Health);
@@ -99,6 +106,9 @@ export default function Dashboard() {
       if (t.status === "fulfilled") setTrades((t.value as { trades: Trade[] }).trades ?? []);
       if (st.status === "fulfilled") setStrategies((st.value as { strategies: Strategy[] }).strategies ?? []);
       if (r.status === "fulfilled") setRuns((r.value as { runs: AgentRun[] }).runs ?? []);
+      if (comp.status === "fulfilled" && !(comp.value as { error?: string }).error) {
+        setCompetition(comp.value as CompetitionStatus);
+      }
 
       setLastRefresh(new Date());
     } catch {
@@ -108,6 +118,24 @@ export default function Dashboard() {
       setRefreshing(false);
     }
   }, []);
+
+  const handleMonitor = useCallback(async () => {
+    setMonitoring(true);
+    try {
+      const res = await fetch("/api/proxy/monitor", { method: "POST" });
+      const result = await res.json();
+      if (result.closed > 0) {
+        addNotif("success", "Positions checked", `${result.closed} trade(s) closed · BNB $${result.current_price?.toFixed(2) ?? "?"}`);
+      } else {
+        addNotif("info", "Positions checked", `${result.checked} open · no TP/SL hit · BNB $${result.current_price?.toFixed(2) ?? "?"}`);
+      }
+      await fetchAll(true);
+    } catch (err) {
+      addNotif("error", "Monitor failed", String(err));
+    } finally {
+      setMonitoring(false);
+    }
+  }, [fetchAll, addNotif]);
 
   const handleRunNow = useCallback(async () => {
     setRunning(true);
@@ -169,7 +197,9 @@ export default function Dashboard() {
         status={status}
         lastRefresh={lastRefresh}
         running={running}
+        monitoring={monitoring}
         onRunNow={handleRunNow}
+        onMonitor={handleMonitor}
       />
 
       {/* Notifications */}
@@ -195,6 +225,30 @@ export default function Dashboard() {
         )}
 
         <StatsRow trades={trades} runs={runs} />
+
+        {competition && <CompetitionPanel status={competition} />}
+
+        <LiveChart trades={trades} strategies={strategies} />
+
+        {(() => {
+          const hasClosedTrades = trades.some((t) => t.pnl_usd != null && t.closed_at != null);
+          return hasClosedTrades ? (
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <EquityCurve trades={trades} />
+              <OpenPositions
+                trades={trades}
+                strategies={strategies}
+                currentPrice={health?.bnb_price ?? null}
+              />
+            </div>
+          ) : (
+            <OpenPositions
+              trades={trades}
+              strategies={strategies}
+              currentPrice={health?.bnb_price ?? null}
+            />
+          );
+        })()}
 
         <LatestStrategy strategy={strategies[0]} />
 

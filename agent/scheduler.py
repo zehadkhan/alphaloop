@@ -5,23 +5,31 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
+import httpx
 import pandas as pd
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from agent.config import config
 from data.cmc_client import CMCClient
-from data.indicators import compute_indicators, extract_last_row
+from data.indicators import compute_indicators, extract_last_row, extract_4h_context
 from strategy.generator import StrategyGenerator
 from strategy.backtester import Backtester
 from execution.wallet import WalletAgent
 from execution.pancakeswap import PancakeSwapExecutor
+from agent.competition import check_drawdown, force_close_stale_positions
+from data.token_scanner import TokenScanner
 from db.models import (
     create_agent_run,
     complete_agent_run,
     create_strategy,
     update_strategy_backtest,
     create_trade,
+    close_trade,
+    list_open_buy_trades,
+    get_today_pnl,
+    get_daily_trade_count,
+    get_last_trade_time,
 )
 
 logger = logging.getLogger(__name__)
@@ -30,6 +38,101 @@ scheduler = AsyncIOScheduler()
 
 # Prevents a second cycle from firing while one is still running.
 _cycle_lock = asyncio.Lock()
+
+
+# ---------------------------------------------------------------------------
+# Trade lifecycle monitor
+# ---------------------------------------------------------------------------
+
+async def _get_token_price(symbol: str) -> float | None:
+    """Fetch the current {symbol}/USDT spot price from Binance (no auth required)."""
+    pair = symbol.upper() + "USDT"
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            resp = await client.get(
+                "https://api.binance.com/api/v3/ticker/price",
+                params={"symbol": pair},
+            )
+        if resp.status_code == 200:
+            return float(resp.json()["price"])
+        logger.warning("[Monitor] Binance %s price returned HTTP %d", pair, resp.status_code)
+    except Exception as exc:
+        logger.error("[Monitor] %s price fetch failed: %s", symbol, exc)
+    return None
+
+
+async def _get_bnb_price() -> float | None:
+    return await _get_token_price("BNB")
+
+
+async def monitor_open_trades() -> dict:
+    """Check every open BUY position against its TP/SL and close if triggered.
+
+    Runs on its own 5-minute schedule AND at the start of each agent cycle so
+    PnL is updated before the position guard decides whether to open a new trade.
+    """
+    trades = await list_open_buy_trades()
+    if not trades:
+        return {"checked": 0, "closed": 0}
+
+    # Fetch price once per unique symbol (token scanner may trade non-BNB tokens)
+    symbols = {t.symbol for t in trades}
+    prices: dict[str, float] = {}
+    for sym in symbols:
+        p = await _get_token_price(sym)
+        if p is not None:
+            prices[sym] = p
+
+    if not prices:
+        logger.warning("[Monitor] Cannot fetch any token prices — skipping trade check")
+        return {"checked": len(trades), "closed": 0, "error": "price_unavailable"}
+
+    closed_count = 0
+    for trade in trades:
+        current_price = prices.get(trade.symbol)
+        if current_price is None:
+            logger.warning("[Monitor] No price for %s — skipping trade %d", trade.symbol, trade.id)
+            continue
+
+        strategy = trade.strategy
+        if strategy is None:
+            continue
+
+        tp = strategy.take_profit
+        sl = strategy.stop_loss
+
+        exit_price: float | None = None
+        reason = ""
+        if current_price >= tp:
+            exit_price = tp
+            reason = "take_profit"
+        elif current_price <= sl:
+            exit_price = sl
+            reason = "stop_loss"
+
+        if exit_price is not None:
+            pnl_usd = (exit_price / trade.entry_price - 1) * trade.amount_usd
+            pnl_pct = (exit_price / trade.entry_price - 1) * 100
+            await close_trade(
+                trade.id,
+                exit_price=round(exit_price, 4),
+                pnl_usd=round(pnl_usd, 4),
+                pnl_percent=round(pnl_pct, 4),
+            )
+            logger.info(
+                "[Monitor] Closed trade id=%d  %s  entry=%.4f → exit=%.4f  pnl=%+.2f%%",
+                trade.id, reason, trade.entry_price, exit_price, pnl_pct,
+            )
+            closed_count += 1
+
+    price_summary = {s: round(p, 4) for s, p in prices.items()}
+    logger.info("[Monitor] Checked %d open trade(s), closed %d  prices=%s",
+                len(trades), closed_count, price_summary)
+    return {
+        "checked": len(trades),
+        "closed": closed_count,
+        "prices": price_summary,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -51,8 +154,73 @@ async def run_agent_cycle() -> dict:
 
 
 async def _run_cycle_impl() -> dict:
-    symbol = config.TRADING_PAIR.split("/")[0].upper()   # "BNB" from "BNB/USDT"
-    base, quote = config.TRADING_PAIR.split("/")         # "BNB", "USDT"
+    quote = "USDT"
+
+    # ── Token selection: scan eligible tokens and pick best momentum ──────
+    if config.COMPETITION_MODE and len(config.ELIGIBLE_TOKENS) > 1:
+        try:
+            scanner = TokenScanner(config.ELIGIBLE_TOKENS)
+            top_tokens = await scanner.scan(top_n=config.TOKEN_SCAN_TOP_N)
+            symbol = top_tokens[0]["symbol"]
+            logger.info("[Scanner] Selected token: %s  score=%.3f", symbol, top_tokens[0]["score"])
+        except Exception as exc:
+            logger.warning("[Scanner] Token scan failed (%s) — falling back to default", exc)
+            symbol = config.TRADING_PAIR.split("/")[0].upper()
+    else:
+        symbol = config.TRADING_PAIR.split("/")[0].upper()
+
+    base = symbol
+
+    # ── Pre-cycle: close any TP/SL hits from open trades ─────────────────
+    await monitor_open_trades()
+
+    # ── Competition: force-close stale positions (ensures daily trade) ────
+    if config.COMPETITION_MODE:
+        stale_closed = await force_close_stale_positions()
+        if stale_closed:
+            logger.info("[Competition] Force-closed %d stale position(s)", stale_closed)
+
+    # ── Competition: drawdown circuit breaker ─────────────────────────────
+    if config.COMPETITION_MODE:
+        drawdown = await check_drawdown()
+        if drawdown["halt"]:
+            logger.critical(
+                "[Competition] Trading HALTED: drawdown=%.1f%% ≥ %.1f%%",
+                drawdown["drawdown_pct"], drawdown["limit_pct"],
+            )
+            return _result("skipped", 0, reason="drawdown_halt",
+                           drawdown_pct=drawdown["drawdown_pct"])
+
+    # ── Competition: daily trade guarantee (override confidence if needed) ─
+    _force_execute = False
+    if config.COMPETITION_MODE:
+        trades_today = await get_daily_trade_count()
+        utc_hour = datetime.now(timezone.utc).hour
+        if trades_today == 0 and utc_hour >= 22:
+            _force_execute = True
+            logger.warning(
+                "[Competition] No trades today and hour=%d UTC — forcing execution this cycle",
+                utc_hour,
+            )
+
+    # ── Position guard: one open BUY at a time ────────────────────────────
+    open_buys = await list_open_buy_trades()
+    if open_buys:
+        logger.info(
+            "Position guard: %d open BUY trade(s) — skipping new entry",
+            len(open_buys),
+        )
+        return _result("skipped", 0, reason="open_position", open_trades=len(open_buys))
+
+    # ── Daily loss guard ──────────────────────────────────────────────────
+    today_pnl = await get_today_pnl()
+    if today_pnl < -config.MAX_DAILY_LOSS_USD:
+        logger.warning(
+            "Daily loss limit breached: today_pnl=%.2f  limit=-%.2f — pausing trading",
+            today_pnl, config.MAX_DAILY_LOSS_USD,
+        )
+        return _result("skipped", 0, reason="daily_loss_limit",
+                       today_pnl=today_pnl, limit=-config.MAX_DAILY_LOSS_USD)
 
     run = await create_agent_run()
     strategies_generated = 0
@@ -64,11 +232,17 @@ async def _run_cycle_impl() -> dict:
         logger.info("=== AlphaLoop cycle starting  run_id=%d  symbol=%s ===", run.id, symbol)
 
         # ── 1. Fetch market data ──────────────────────────────────────────
-        logger.info("[1/6] Fetching market data from CoinMarketCap…")
+        logger.info("[1/6] Fetching market data (daily + 4h)…")
         async with CMCClient() as cmc:
             market_data = await cmc.get_quote(symbol)
-            # Fetch 60 candles: 50+ needed for SMA-50, last 30 used by backtester
-            ohlcv_data = await cmc.get_ohlcv(symbol, time_period="daily", count=60)
+            # 60 daily candles: 50+ for SMA-50; backtester uses IS=45 + OOS=15
+            ohlcv_data  = await cmc.get_ohlcv(symbol, time_period="daily", count=60)
+            # 100 × 4h candles ≈ last 17 days of intraday context
+            try:
+                ohlcv_4h = await cmc.get_ohlcv(symbol, time_period="4h", count=100)
+            except Exception as exc:
+                logger.warning("4h data fetch failed (%s) — continuing without it", exc)
+                ohlcv_4h = []
 
         logger.info(
             "Market data fetched: price=%.4f  vol_24h=%.0f  change_24h=%+.2f%%",
@@ -83,8 +257,19 @@ async def _run_cycle_impl() -> dict:
         df = compute_indicators(df)
         indicators = extract_last_row(df)
 
+        indicators_4h: dict | None = None
+        if ohlcv_4h:
+            df_4h = _ohlcv_to_dataframe(ohlcv_4h)
+            df_4h = compute_indicators(df_4h)
+            indicators_4h = extract_4h_context(df_4h)
+            logger.info(
+                "4h context: RSI=%.2f (%s)  trend=%s  MACD_hist=%.6f",
+                indicators_4h["rsi"], indicators_4h["rsi_state"],
+                indicators_4h["trend"], indicators_4h["macd_hist"],
+            )
+
         logger.info(
-            "Indicators: RSI=%.2f  MACD=%.6f  BB=[%.2f / %.2f / %.2f]  SMA20=%.2f  SMA50=%.2f",
+            "Daily indicators: RSI=%.2f  MACD=%.6f  BB=[%.2f / %.2f / %.2f]  SMA20=%.2f  SMA50=%.2f",
             indicators["rsi"],
             indicators["macd"],
             indicators["bb_lower"],
@@ -97,7 +282,7 @@ async def _run_cycle_impl() -> dict:
         # ── 3. Generate strategy via LLM ──────────────────────────────────
         logger.info("[3/6] Generating strategy via Claude (Anthropic)…")
         async with StrategyGenerator() as gen:
-            strategy = await gen.generate(symbol, market_data, indicators)
+            strategy = await gen.generate(symbol, market_data, indicators, indicators_4h)
 
         strategies_generated = 1
         logger.info(
@@ -111,15 +296,20 @@ async def _run_cycle_impl() -> dict:
         )
 
         # ── 4. Gate: HOLD or low confidence ──────────────────────────────
-        if strategy["action"] == "HOLD":
+        if strategy["action"] == "HOLD" and not _force_execute:
             logger.info("Action=HOLD — no trade this cycle")
             await _finish_run(run.id, strategies_generated, 0, 0.0, None)
             return _result("skipped", run.id, reason="HOLD")
 
-        if strategy["confidence"] < config.MIN_CONFIDENCE:
+        if strategy["action"] == "HOLD" and _force_execute:
+            strategy["action"] = "BUY"
+            logger.warning("[Competition] Overriding HOLD → BUY to guarantee daily trade")
+
+        min_confidence = 0.3 if _force_execute else config.MIN_CONFIDENCE
+        if strategy["confidence"] < min_confidence:
             logger.info(
                 "Confidence %.2f < %.2f threshold — skipping",
-                strategy["confidence"], config.MIN_CONFIDENCE,
+                strategy["confidence"], min_confidence,
             )
             await _finish_run(run.id, strategies_generated, 0, 0.0, None)
             return _result("skipped", run.id, reason="low_confidence",
@@ -159,9 +349,14 @@ async def _run_cycle_impl() -> dict:
                            strategy_id=db_strategy.id, backtest=backtest["summary"])
 
         # ── 7. Execute swap ───────────────────────────────────────────────
-        logger.info("[5/6] Executing swap on PancakeSwap V2 (BSC testnet)…")
-        wallet   = WalletAgent()
-        executor = PancakeSwapExecutor(wallet)
+        if config.TWAK_REST_URL:
+            from execution.twak_executor import TWAKExecutor
+            executor = TWAKExecutor()
+            logger.info("[5/6] Executing swap via TWAK REST (%s)…", config.TWAK_REST_URL)
+        else:
+            wallet   = WalletAgent()
+            executor = PancakeSwapExecutor(wallet)
+            logger.info("[5/6] Executing swap on PancakeSwap V2 (BSC)…")
 
         # BUY  = spend quote (USDT) to get base (BNB)
         # SELL = spend base (BNB) to get quote (USDT)
@@ -170,7 +365,16 @@ async def _run_cycle_impl() -> dict:
         else:
             token_in, token_out = base, quote
 
-        swap = await executor.swap(token_in, token_out, config.MAX_POSITION_SIZE_USD)
+        # Scale position by confidence: 50–100% of MAX_POSITION_SIZE_USD
+        position_usd = round(
+            config.MAX_POSITION_SIZE_USD * max(0.5, min(1.0, strategy["confidence"])), 2
+        )
+        logger.info(
+            "Position sizing: confidence=%.2f → $%.2f (max $%.2f)",
+            strategy["confidence"], position_usd, config.MAX_POSITION_SIZE_USD,
+        )
+
+        swap = await executor.swap(token_in, token_out, position_usd)
         trades_executed = 1
 
         logger.info(
@@ -184,13 +388,11 @@ async def _run_cycle_impl() -> dict:
             swap["tx_hash"],
         )
 
-        # ── 8. Compute PnL (SELL only — BUY PnL realised on future SELL) ─
-        pnl_usd, pnl_pct = _compute_pnl(strategy["action"], swap, config.MAX_POSITION_SIZE_USD)
+        # ── 8. Compute PnL (SELL only — BUY PnL realised on future close) ─
+        pnl_usd, pnl_pct = _compute_pnl(strategy["action"], swap, position_usd)
         total_pnl = pnl_usd
 
         # ── 9. Save trade ─────────────────────────────────────────────────
-        # Map PancakeSwap statuses → Trade model statuses:
-        #   "success" → "executed", "failed" → "failed", "dry_run" → "dry_run"
         trade_status = "executed" if swap["status"] == "success" else swap["status"]
 
         logger.info("[6/6] Saving trade to database…")
@@ -198,7 +400,7 @@ async def _run_cycle_impl() -> dict:
             "strategy_id": db_strategy.id,
             "symbol":      symbol,
             "action":      strategy["action"],
-            "amount_usd":  config.MAX_POSITION_SIZE_USD,
+            "amount_usd":  position_usd,
             "entry_price": strategy["entry_price"],
             "exit_price":  swap["amount_out"] / swap["amount_in"] if strategy["action"] == "SELL" and swap["amount_in"] else None,
             "pnl_usd":     pnl_usd  if strategy["action"] == "SELL" else None,
@@ -242,7 +444,14 @@ def start_scheduler(interval_minutes: int = 30) -> None:
         trigger=IntervalTrigger(minutes=interval_minutes),
         id="agent_cycle",
         replace_existing=True,
-        max_instances=1,    # APScheduler won't queue a second instance
+        max_instances=1,
+    )
+    scheduler.add_job(
+        monitor_open_trades,
+        trigger=IntervalTrigger(minutes=5),
+        id="trade_monitor",
+        replace_existing=True,
+        max_instances=1,
     )
     scheduler.start()
     logger.info("Scheduler started — interval=%d min  next_run=%s",

@@ -7,12 +7,21 @@ export function cn(...inputs: ClassValue[]) {
 
 export function timeAgo(dateStr: string | null): string {
   if (!dateStr) return "—";
-  const date = new Date(dateStr);
-  const diff = Math.floor((Date.now() - date.getTime()) / 1000);
+  const diff = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
   if (diff < 60) return `${diff}s ago`;
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   return `${Math.floor(diff / 86400)}d ago`;
+}
+
+export function timeUntil(dateStr: string | null): string {
+  if (!dateStr) return "—";
+  const diff = Math.floor((new Date(dateStr).getTime() - Date.now()) / 1000);
+  if (diff <= 0) return "now";
+  if (diff < 60) return `in ${diff}s`;
+  if (diff < 3600) return `in ${Math.floor(diff / 60)}m`;
+  if (diff < 86400) return `in ${Math.floor(diff / 3600)}h`;
+  return `in ${Math.floor(diff / 86400)}d`;
 }
 
 export function formatPrice(n: number | null | undefined, decimals = 2): string {

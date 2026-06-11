@@ -30,7 +30,7 @@ function StatCard({
             <p className={`text-2xl font-bold tabular-nums ${color}`}>{value}</p>
             {sub && <p className="text-xs text-text-muted">{sub}</p>}
           </div>
-          <div className={`p-2 rounded-lg`} style={{ background: "rgba(255,255,255,0.04)" }}>
+          <div className="p-2 rounded-lg bg-surface-2 border border-border-subtle">
             <Icon size={18} className={color} />
           </div>
         </div>

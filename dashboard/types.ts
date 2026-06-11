@@ -53,8 +53,25 @@ export type AgentStatus = {
   trading_pair: string;
   dry_run: boolean;
   max_position_usd: number;
+  open_positions: number;
+  competition_mode: boolean;
+  signing_backend: "twak" | "web3";
   last_run: AgentRun | null;
   scheduled_jobs: Array<{ id: string; next_run: string }>;
+};
+
+export type CompetitionStatus = {
+  competition_mode: boolean;
+  in_trading_window: boolean;
+  days_remaining: number;
+  trades_today: number;
+  min_trades_met: boolean;
+  drawdown_pct: number;
+  drawdown_halt: boolean;
+  today_pnl: number;
+  open_positions: number;
+  stale_positions: number[];
+  initial_portfolio_usd: number;
 };
 
 export type RunResult = {

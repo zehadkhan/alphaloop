@@ -1,16 +1,23 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install deps in a separate layer so rebuilds don't reinstall on code-only changes
+# Install system CA certs + curl for health checks
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Ensure the storage directory exists so SQLite can create the DB file
 RUN mkdir -p /app/storage
+
+# Use system CA bundle so a full/corrupt Docker overlay can't break HTTPS via certifi
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+ENV REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
 EXPOSE 8000
 
-CMD ["uvicorn", "agent.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "agent.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

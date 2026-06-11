@@ -2,36 +2,60 @@
 @tailwind components;
 @tailwind utilities;
 
-* {
-  box-sizing: border-box;
+/* ── Color tokens ──────────────────────────────────────────────────────────
+   Profit / loss / accent use space-separated RGB so Tailwind's /20 opacity
+   modifier works: bg-profit/20 → rgb(var(--profit) / 0.2)
+   ──────────────────────────────────────────────────────────────────────── */
+
+:root {
+  /* Light mode surfaces */
+  --background:    #f1f5f9;
+  --surface:       #ffffff;
+  --surface-2:     #f8fafc;
+  --border-subtle: #e2e8f0;
+
+  /* Light mode text */
+  --text-primary:   #0f172a;
+  --text-secondary: #475569;
+  --text-muted:     #94a3b8;
+
+  /* Light mode accents — darker for readability on white */
+  --profit: 5 150 105;    /* #059669 emerald-600 */
+  --loss:   220 38 38;     /* #dc2626 red-600    */
+  --accent: 37 99 235;     /* #2563eb blue-600   */
 }
 
-html,
-body {
-  background-color: #0f1117;
-  color: #e2e8f0;
+.dark {
+  /* Dark mode surfaces */
+  --background:    #0f1117;
+  --surface:       #151823;
+  --surface-2:     #1a1f2e;
+  --border-subtle: #1e2433;
+
+  /* Dark mode text */
+  --text-primary:   #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-muted:     #4b5675;
+
+  /* Dark mode accents — vivid on dark */
+  --profit: 0 192 118;     /* #00c076 */
+  --loss:   255 59 105;    /* #ff3b69 */
+  --accent: 59 130 246;    /* #3b82f6 */
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  background-color: var(--background);
+  color: var(--text-primary);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
-/* Scrollbar styling */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: #0f1117;
-}
-::-webkit-scrollbar-thumb {
-  background: #1e2433;
-  border-radius: 3px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #2a3245;
-}
-
-/* Numeric font for price displays */
-.tabular-nums {
-  font-variant-numeric: tabular-nums;
-}
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--background); }
+::-webkit-scrollbar-thumb { background: var(--border-subtle); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--surface-2); }
