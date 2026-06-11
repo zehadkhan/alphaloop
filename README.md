@@ -61,7 +61,7 @@ DRY_RUN=false
 # TWAK
 TWAK_REST_URL=http://localhost:7777
 TWAK_WALLET_NAME=alphaloop
-TWAK_HMAC_SECRET=dfa9b43bb162b52dd440ff83dc86d31b78b496a87ddf68461d81dc9121aa98dc
+TWAK_HMAC_SECRET=<from portal.trustwallet.com>
 
 # Trading
 TRADING_PAIR=BNB/USDT
