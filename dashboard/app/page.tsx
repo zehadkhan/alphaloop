@@ -234,7 +234,12 @@ export default function Dashboard() {
           </div>
         )}
 
-        <StatsRow trades={trades} runs={runs} />
+        <StatsRow
+          trades={trades}
+          runs={runs}
+          initialPortfolio={competition?.initial_portfolio_usd ?? 1000}
+          currentPrice={health?.bnb_price ?? null}
+        />
 
         <ActivityFeed items={activity} />
 
