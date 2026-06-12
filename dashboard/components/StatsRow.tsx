@@ -128,10 +128,12 @@ export default function StatsRow({
   const closedTrades = trades.filter(
     (t) => t.pnl_usd !== null && t.closed_at !== null
   );
-  const winningTrades = closedTrades.filter((t) => (t.pnl_usd ?? 0) > 0);
+  // Only count trades with meaningful price movement (>= $0.01) in win/loss calc
+  const decidedTrades  = closedTrades.filter((t) => Math.abs(t.pnl_usd ?? 0) >= 0.01);
+  const winningTrades  = decidedTrades.filter((t) => (t.pnl_usd ?? 0) > 0);
   const winRate =
-    closedTrades.length > 0
-      ? (winningTrades.length / closedTrades.length) * 100
+    decidedTrades.length > 0
+      ? (winningTrades.length / decidedTrades.length) * 100
       : null;
 
   // Realised PnL
@@ -231,7 +233,11 @@ export default function StatsRow({
       <StatCard
         label="Win Rate"
         value={winRate != null ? `${winRate.toFixed(0)}%` : "—"}
-        sub={`${winningTrades.length}W · ${closedTrades.length - winningTrades.length}L · ${trades.length} total`}
+        sub={
+          decidedTrades.length === 0
+            ? `${closedTrades.length} closed · no P&L yet`
+            : `${winningTrades.length}W · ${decidedTrades.length - winningTrades.length}L · ${decidedTrades.length} decided`
+        }
         icon={winRate != null && winRate >= 50 ? TrendingUp : TrendingDown}
         sentiment={winSentiment}
       />
