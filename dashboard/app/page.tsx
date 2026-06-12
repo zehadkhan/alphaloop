@@ -24,25 +24,13 @@ type Notification = {
 
 let notifId = 0;
 
-function NotificationToast({
-  notif,
-  onDismiss,
-}: {
-  notif: Notification;
-  onDismiss: () => void;
-}) {
-  const Icon =
-    notif.type === "success"
-      ? CheckCircle2
-      : notif.type === "error"
-      ? AlertTriangle
-      : Info;
-  const color =
-    notif.type === "success"
-      ? "text-profit border-profit/30 bg-profit/10"
-      : notif.type === "error"
-      ? "text-loss border-loss/30 bg-loss/10"
-      : "text-accent border-accent/30 bg-accent/10";
+function NotificationToast({ notif, onDismiss }: { notif: Notification; onDismiss: () => void }) {
+  const Icon = notif.type === "success" ? CheckCircle2 : notif.type === "error" ? AlertTriangle : Info;
+  const styles = {
+    success: "text-profit border-profit/25 bg-profit/10",
+    error:   "text-loss border-loss/25 bg-loss/10",
+    info:    "text-accent border-accent/25 bg-accent/10",
+  }[notif.type];
 
   useEffect(() => {
     const t = setTimeout(onDismiss, 6000);
@@ -50,44 +38,39 @@ function NotificationToast({
   }, [onDismiss]);
 
   return (
-    <div
-      className={`flex items-start gap-3 px-4 py-3 rounded-xl border text-sm animate-slide-in ${color}`}
-    >
-      <Icon size={16} className="mt-0.5 shrink-0" />
+    <div className={`flex items-start gap-3 px-4 py-3 rounded-2xl border text-sm animate-slide-in backdrop-blur-sm ${styles}`}>
+      <Icon size={15} className="mt-0.5 shrink-0" />
       <div className="flex-1 min-w-0">
-        <p className="font-semibold">{notif.title}</p>
-        <p className="opacity-80 text-xs mt-0.5">{notif.message}</p>
+        <p className="font-semibold leading-tight">{notif.title}</p>
+        <p className="opacity-75 text-xs mt-0.5 leading-snug">{notif.message}</p>
       </div>
-      <button onClick={onDismiss} className="opacity-60 hover:opacity-100 transition-opacity shrink-0">
-        <X size={14} />
+      <button onClick={onDismiss} className="opacity-50 hover:opacity-100 transition-opacity shrink-0 mt-0.5">
+        <X size={13} />
       </button>
     </div>
   );
 }
 
 export default function Dashboard() {
-  const [health, setHealth] = useState<Health | null>(null);
-  const [status, setStatus] = useState<AgentStatus | null>(null);
-  const [trades, setTrades] = useState<Trade[]>([]);
+  const [health, setHealth]         = useState<Health | null>(null);
+  const [status, setStatus]         = useState<AgentStatus | null>(null);
+  const [trades, setTrades]         = useState<Trade[]>([]);
   const [strategies, setStrategies] = useState<Strategy[]>([]);
-  const [runs, setRuns] = useState<AgentRun[]>([]);
-  const [activity, setActivity] = useState<ActivityItem[]>([]);
-  const [botConfig, setBotConfig] = useState<BotConfig | null>(null);
+  const [runs, setRuns]             = useState<AgentRun[]>([]);
+  const [activity, setActivity]     = useState<ActivityItem[]>([]);
+  const [botConfig, setBotConfig]   = useState<BotConfig | null>(null);
+  const [competition, setCompetition] = useState<CompetitionStatus | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading]       = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [running, setRunning] = useState(false);
+  const [running, setRunning]       = useState(false);
   const [monitoring, setMonitoring] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [competition, setCompetition] = useState<CompetitionStatus | null>(null);
 
-  const addNotif = useCallback(
-    (type: Notification["type"], title: string, message: string) => {
-      const id = ++notifId;
-      setNotifications((prev) => [...prev, { id, type, title, message }]);
-    },
-    []
-  );
+  const addNotif = useCallback((type: Notification["type"], title: string, message: string) => {
+    const id = ++notifId;
+    setNotifications((prev) => [...prev, { id, type, title, message }]);
+  }, []);
 
   const removeNotif = useCallback((id: number) => {
     setNotifications((prev) => prev.filter((n) => n.id !== id));
@@ -107,23 +90,19 @@ export default function Dashboard() {
         fetch("/api/proxy/admin/config").then((r) => r.json()),
       ]);
 
-      if (h.status === "fulfilled") setHealth(h.value as Health);
-      if (s.status === "fulfilled") setStatus(s.value as AgentStatus);
-      if (t.status === "fulfilled") setTrades((t.value as { trades: Trade[] }).trades ?? []);
-      if (st.status === "fulfilled") setStrategies((st.value as { strategies: Strategy[] }).strategies ?? []);
-      if (r.status === "fulfilled") setRuns((r.value as { runs: AgentRun[] }).runs ?? []);
-      if (comp.status === "fulfilled" && !(comp.value as { error?: string }).error) {
+      if (h.status   === "fulfilled") setHealth(h.value as Health);
+      if (s.status   === "fulfilled") setStatus(s.value as AgentStatus);
+      if (t.status   === "fulfilled") setTrades((t.value as { trades: Trade[] }).trades ?? []);
+      if (st.status  === "fulfilled") setStrategies((st.value as { strategies: Strategy[] }).strategies ?? []);
+      if (r.status   === "fulfilled") setRuns((r.value as { runs: AgentRun[] }).runs ?? []);
+      if (comp.status === "fulfilled" && !(comp.value as { error?: string }).error)
         setCompetition(comp.value as CompetitionStatus);
-      }
       if (act.status === "fulfilled") setActivity((act.value as { items: ActivityItem[] }).items ?? []);
-      if (cfg.status === "fulfilled" && !(cfg.value as { error?: string }).error) {
+      if (cfg.status === "fulfilled" && !(cfg.value as { error?: string }).error)
         setBotConfig(cfg.value as BotConfig);
-      }
 
       setLastRefresh(new Date());
-    } catch {
-      // silently fail — UI will show stale data
-    } finally {
+    } catch { /* silently fail — UI shows stale data */ } finally {
       setLoading(false);
       setRefreshing(false);
     }
@@ -132,12 +111,12 @@ export default function Dashboard() {
   const handleMonitor = useCallback(async () => {
     setMonitoring(true);
     try {
-      const res = await fetch("/api/proxy/monitor", { method: "POST" });
+      const res    = await fetch("/api/proxy/monitor", { method: "POST" });
       const result = await res.json();
       if (result.closed > 0) {
-        addNotif("success", "Positions checked", `${result.closed} trade(s) closed · BNB $${result.current_price?.toFixed(2) ?? "?"}`);
+        addNotif("success", "Positions checked", `${result.closed} trade(s) closed`);
       } else {
-        addNotif("info", "Positions checked", `${result.checked} open · no TP/SL hit · BNB $${result.current_price?.toFixed(2) ?? "?"}`);
+        addNotif("info", "Positions checked", `${result.checked} open · no TP/SL hit`);
       }
       await fetchAll(true);
     } catch (err) {
@@ -150,31 +129,17 @@ export default function Dashboard() {
   const handleRunNow = useCallback(async () => {
     setRunning(true);
     try {
-      const res = await fetch("/api/proxy/run", { method: "POST" });
+      const res    = await fetch("/api/proxy/run", { method: "POST" });
       const result: RunResult = await res.json();
-
       if (result.status === "executed") {
-        addNotif(
-          "success",
-          "Cycle executed",
-          result.backtest
-            ? `${result.action} · ${result.backtest.split("|")[0].trim()}`
-            : `Trade ${result.trade_id ? `#${result.trade_id}` : ""} recorded`
-        );
+        addNotif("success", "Cycle executed",
+          result.backtest ? `${result.action} · ${result.backtest.split("|")[0].trim()}` :
+          `Trade ${result.trade_id ? `#${result.trade_id}` : ""} recorded`);
       } else if (result.status === "skipped") {
-        addNotif(
-          "info",
-          "Cycle skipped",
-          result.reason ?? "No actionable signal"
-        );
+        addNotif("info", "Cycle skipped", result.reason ?? "No actionable signal");
       } else {
-        addNotif(
-          "error",
-          "Cycle error",
-          result.error ?? "Unknown error"
-        );
+        addNotif("error", "Cycle error", result.error ?? "Unknown error");
       }
-
       await fetchAll(true);
     } catch (err) {
       addNotif("error", "Request failed", String(err));
@@ -189,12 +154,17 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, [fetchAll]);
 
+  const hasClosedTrades = trades.some((t) => t.pnl_usd != null && t.closed_at != null);
+  const initialPortfolio = competition?.initial_portfolio_usd ?? 1000;
+
   if (loading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3 text-text-muted">
-          <RefreshCw size={24} className="animate-spin text-profit" />
-          <p className="text-sm">Connecting to AlphaLoop agent…</p>
+        <div className="flex flex-col items-center gap-4 text-text-muted">
+          <div className="w-10 h-10 rounded-2xl bg-profit/10 border border-profit/20 flex items-center justify-center">
+            <RefreshCw size={18} className="animate-spin text-profit" />
+          </div>
+          <p className="text-sm font-medium">Connecting to AlphaLoop…</p>
         </div>
       </div>
     );
@@ -212,64 +182,71 @@ export default function Dashboard() {
         onMonitor={handleMonitor}
       />
 
-      {/* Notifications */}
+      {/* Toast notifications */}
       {notifications.length > 0 && (
-        <div className="fixed top-20 right-4 z-50 w-80 space-y-2">
+        <div className="fixed top-16 right-4 z-50 w-80 space-y-2 pointer-events-none">
           {notifications.map((n) => (
-            <NotificationToast
-              key={n.id}
-              notif={n}
-              onDismiss={() => removeNotif(n.id)}
-            />
+            <div key={n.id} className="pointer-events-auto">
+              <NotificationToast notif={n} onDismiss={() => removeNotif(n.id)} />
+            </div>
           ))}
         </div>
       )}
 
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-        {/* Refresh indicator */}
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-5">
+
+        {/* Refresh pill */}
         {refreshing && (
-          <div className="flex items-center gap-1.5 text-xs text-text-muted animate-fade-in">
-            <RefreshCw size={11} className="animate-spin" />
+          <div className="flex items-center gap-1.5 text-[11px] text-text-muted animate-fade-in">
+            <RefreshCw size={10} className="animate-spin" />
             Refreshing…
           </div>
         )}
 
+        {/* ── Row 1: Stats ─────────────────────────────────────────────── */}
         <StatsRow
           trades={trades}
           runs={runs}
-          initialPortfolio={competition?.initial_portfolio_usd ?? 1000}
+          initialPortfolio={initialPortfolio}
           currentPrice={health?.bnb_price ?? null}
         />
 
-        <ActivityFeed items={activity} />
+        {/* ── Row 2: Activity + Competition side-by-side ───────────────── */}
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
+          <div className="xl:col-span-2">
+            <ActivityFeed items={activity} />
+          </div>
+          <div className="space-y-5">
+            {competition && <CompetitionPanel status={competition} />}
+          </div>
+        </div>
 
-        {competition && <CompetitionPanel status={competition} />}
-
+        {/* ── Row 3: Live Chart ─────────────────────────────────────────── */}
         <LiveChart trades={trades} strategies={strategies} />
 
-        {(() => {
-          const hasClosedTrades = trades.some((t) => t.pnl_usd != null && t.closed_at != null);
-          return hasClosedTrades ? (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <EquityCurve trades={trades} />
-              <OpenPositions
-                trades={trades}
-                strategies={strategies}
-                currentPrice={health?.bnb_price ?? null}
-              />
-            </div>
-          ) : (
+        {/* ── Row 4: Open Positions + Equity Curve ─────────────────────── */}
+        {hasClosedTrades ? (
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+            <EquityCurve trades={trades} />
             <OpenPositions
               trades={trades}
               strategies={strategies}
               currentPrice={health?.bnb_price ?? null}
             />
-          );
-        })()}
+          </div>
+        ) : (
+          <OpenPositions
+            trades={trades}
+            strategies={strategies}
+            currentPrice={health?.bnb_price ?? null}
+          />
+        )}
 
+        {/* ── Row 5: Latest Strategy ───────────────────────────────────── */}
         <LatestStrategy strategy={strategies[0]} />
 
-        <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+        {/* ── Row 6: Trade History + Agent Runs ────────────────────────── */}
+        <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
           <div className="xl:col-span-2">
             <TradeHistory trades={trades} />
           </div>
@@ -277,18 +254,16 @@ export default function Dashboard() {
             <AgentRuns runs={runs} />
           </div>
         </div>
+
       </main>
 
-      <footer className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 border-t border-border-subtle">
-        <div className="flex items-center justify-between text-xs text-text-muted">
-          <span>AlphaLoop · BSC Testnet · Auto-refreshes every 30s</span>
-          <span>
-            Backend:{" "}
-            <span
-              className={health?.status === "ok" ? "text-profit" : "text-loss"}
-            >
-              {health?.status === "ok" ? "● online" : "● offline"}
-            </span>
+      {/* Footer */}
+      <footer className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5 border-t border-border-subtle mt-4">
+        <div className="flex items-center justify-between text-[11px] text-text-muted">
+          <span className="font-medium">AlphaLoop · BSC · Auto-refresh 30s</span>
+          <span className="flex items-center gap-1.5">
+            <span className={`w-1.5 h-1.5 rounded-full ${health?.status === "ok" ? "bg-profit animate-pulse" : "bg-loss"}`} />
+            Backend {health?.status === "ok" ? "online" : "offline"}
           </span>
         </div>
       </footer>

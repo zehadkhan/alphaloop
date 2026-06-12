@@ -1,9 +1,17 @@
 import type { Metadata } from "next";
+import { Inter } from "next/font/google";
 import "./globals.css";
+
+const inter = Inter({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-inter",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "AlphaLoop — Trading Dashboard",
-  description: "Autonomous BNB/USDT trading agent dashboard",
+  description: "Autonomous BSC trading agent — AlphaLoop",
 };
 
 export default function RootLayout({
@@ -21,7 +29,7 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body>{children}</body>
+      <body className={inter.className}>{children}</body>
     </html>
   );
 }

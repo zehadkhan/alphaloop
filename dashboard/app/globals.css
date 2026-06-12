@@ -9,53 +9,138 @@
 
 :root {
   /* Light mode surfaces */
-  --background:    #f1f5f9;
+  --background:    #f0f4f8;
   --surface:       #ffffff;
-  --surface-2:     #f8fafc;
-  --border-subtle: #e2e8f0;
+  --surface-2:     #f5f8fc;
+  --border-subtle: #dde5f0;
 
   /* Light mode text */
-  --text-primary:   #0f172a;
-  --text-secondary: #475569;
-  --text-muted:     #94a3b8;
+  --text-primary:   #0c1428;
+  --text-secondary: #4a5878;
+  --text-muted:     #9aa8c0;
 
   /* Light mode accents — darker for readability on white */
-  --profit: 5 150 105;    /* #059669 emerald-600 */
-  --loss:   220 38 38;     /* #dc2626 red-600    */
-  --accent: 37 99 235;     /* #2563eb blue-600   */
+  --profit: 0 160 110;     /* #00a06e */
+  --loss:   210 40 70;     /* #d22846 */
+  --accent: 37 90 220;     /* #255adc */
 }
 
 .dark {
   /* Dark mode surfaces */
-  --background:    #0f1117;
-  --surface:       #151823;
-  --surface-2:     #1a1f2e;
-  --border-subtle: #1e2433;
+  --background:    #05080f;
+  --surface:       #0b1120;
+  --surface-2:     #0f1729;
+  --border-subtle: #1a2340;
 
   /* Dark mode text */
-  --text-primary:   #e2e8f0;
-  --text-secondary: #94a3b8;
-  --text-muted:     #4b5675;
+  --text-primary:   #dde4f2;
+  --text-secondary: #7888a8;
+  --text-muted:     #3a4760;
 
   /* Dark mode accents — vivid on dark */
-  --profit: 0 192 118;     /* #00c076 */
-  --loss:   255 59 105;    /* #ff3b69 */
-  --accent: 59 130 246;    /* #3b82f6 */
+  --profit: 0 200 150;     /* #00c896 */
+  --loss:   255 70 100;    /* #ff4664 */
+  --accent: 79 127 255;    /* #4f7fff */
 }
 
+/* ── Base reset ─────────────────────────────────────────────────────────── */
 * { box-sizing: border-box; }
 
 html, body {
   background-color: var(--background);
   color: var(--text-primary);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  transition: background-color 0.2s ease, color 0.2s ease;
+  transition: background-color 0.25s ease, color 0.25s ease;
 }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 6px; height: 6px; }
+/* ── Scrollbar ──────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: var(--background); }
-::-webkit-scrollbar-thumb { background: var(--border-subtle); border-radius: 3px; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 3px;
+  transition: background 0.2s ease;
+}
 ::-webkit-scrollbar-thumb:hover { background: var(--surface-2); }
+
+/* ── Animations ─────────────────────────────────────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(-10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulseDot {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.4; transform: scale(0.75); }
+}
+
+@keyframes glowPulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.6; }
+}
+
+/* ── Component layer ────────────────────────────────────────────────────── */
+@layer components {
+
+  /* Stat card — subtle border + hover glow */
+  .stat-card {
+    @apply rounded-xl border bg-surface p-4;
+    border-color: var(--border-subtle);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+  .stat-card:hover {
+    border-color: rgb(var(--accent) / 0.35);
+    box-shadow: 0 0 0 1px rgb(var(--accent) / 0.15),
+                0 4px 24px rgb(var(--accent) / 0.08);
+  }
+
+  /* Timeline dots */
+  .timeline-dot-green  { @apply inline-block w-2 h-2 rounded-full bg-profit; }
+  .timeline-dot-yellow { @apply inline-block w-2 h-2 rounded-full bg-yellow-400; }
+  .timeline-dot-orange { @apply inline-block w-2 h-2 rounded-full bg-orange-400; }
+  .timeline-dot-red    { @apply inline-block w-2 h-2 rounded-full bg-loss; }
+  .timeline-dot-gray   { @apply inline-block w-2 h-2 rounded-full bg-text-muted; }
+  .timeline-dot-blue   { @apply inline-block w-2 h-2 rounded-full bg-accent; }
+
+  /* Big number glow */
+  .number-glow-profit {
+    color: rgb(var(--profit));
+    text-shadow:
+      0 0 12px rgb(var(--profit) / 0.55),
+      0 0 24px rgb(var(--profit) / 0.25);
+  }
+  .number-glow-loss {
+    color: rgb(var(--loss));
+    text-shadow:
+      0 0 12px rgb(var(--loss) / 0.55),
+      0 0 24px rgb(var(--loss) / 0.25);
+  }
+
+  /* Live badge */
+  .badge-live {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-semibold;
+    background: rgb(var(--profit) / 0.12);
+    color: rgb(var(--profit));
+    border: 1px solid rgb(var(--profit) / 0.3);
+  }
+  .badge-live::before {
+    content: "";
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 9999px;
+    background: rgb(var(--profit));
+    animation: pulseDot 1.4s ease-in-out infinite;
+  }
+}

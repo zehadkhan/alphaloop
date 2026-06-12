@@ -10,7 +10,7 @@ export function Card({
   return (
     <div
       className={cn(
-        "rounded-xl border border-border-subtle bg-surface",
+        "rounded-2xl border border-border-subtle bg-surface hover:border-white/10 transition-colors duration-200",
         className
       )}
     >
@@ -39,7 +39,12 @@ export function CardTitle({
   children: React.ReactNode;
 }) {
   return (
-    <h3 className={cn("text-sm font-semibold text-text-secondary uppercase tracking-wider", className)}>
+    <h3
+      className={cn(
+        "text-xs font-semibold text-text-muted uppercase tracking-widest",
+        className
+      )}
+    >
       {children}
     </h3>
   );
