@@ -102,17 +102,27 @@ export default function CompetitionPanel({ status }: Props) {
           {/* Trades today */}
           <Metric
             label="Today"
-            value={`${tradesToday} trade${tradesToday !== 1 ? "s" : ""}`}
-            sub={status.min_trades_met ? "✓ min met" : "⚠ need 1 trade"}
-            color={todayColor}
+            value={status.in_trading_window ? `${tradesToday} trade${tradesToday !== 1 ? "s" : ""}` : "—"}
+            sub={
+              !status.in_trading_window ? "window not open" :
+              status.min_trades_met ? "✓ min met" : "⚠ need 1 trade"
+            }
+            color={!status.in_trading_window ? "text-text-muted" : todayColor}
             icon={BarChart2}
           />
 
           {/* Today P&L */}
           <Metric
             label="Today PnL"
-            value={`${status.today_pnl >= 0 ? "+" : ""}$${status.today_pnl.toFixed(2)}`}
-            color={status.today_pnl >= 0 ? "text-profit" : "text-loss"}
+            value={
+              !status.in_trading_window ? "—" :
+              `${status.today_pnl >= 0 ? "+" : ""}$${status.today_pnl.toFixed(2)}`
+            }
+            sub={!status.in_trading_window ? "starts Jun 22" : undefined}
+            color={
+              !status.in_trading_window ? "text-text-muted" :
+              status.today_pnl >= 0 ? "text-profit" : "text-loss"
+            }
             icon={Trophy}
           />
 
