@@ -42,48 +42,6 @@ Minimum: 0.02 BNB (~$12) | Recommended: 0.05 BNB (~$30)
 
 ---
 
-## .env for Mainnet (June 22)
-
-```bash
-# API Keys
-ANTHROPIC_API_KEY=sk-ant-...
-CMC_API_KEY=...
-
-# Wallet
-AGENT_PRIVATE_KEY=0x...        # fallback only — TWAK is the primary signer
-AGENT_WALLET_ADDRESS=0x9FF88b9333C161c8542Bd817C1FF422f89210866
-
-# Network — MAINNET
-ENVIRONMENT=mainnet
-BSC_RPC_URL=https://bsc-dataseed.binance.org/
-DRY_RUN=false
-
-# TWAK
-TWAK_REST_URL=http://localhost:7777
-TWAK_WALLET_NAME=alphaloop
-TWAK_HMAC_SECRET=<from portal.trustwallet.com>
-
-# Trading
-TRADING_PAIR=BNB/USDT
-MAX_POSITION_SIZE_USD=10
-MIN_CONFIDENCE=0.6
-CYCLE_INTERVAL_MINUTES=30
-MAX_DAILY_LOSS_USD=50
-STOP_LOSS_PERCENT=5
-
-# Competition
-COMPETITION_MODE=true
-INITIAL_PORTFOLIO_USD=1000
-MAX_DRAWDOWN_PCT=25
-MAX_POSITION_HOLD_HOURS=20
-TOKEN_SCAN_TOP_N=3
-
-# Database
-DATABASE_URL=sqlite+aiosqlite:///./storage/alphaloop.db
-```
-
----
-
 ## Architecture
 
 ```
