@@ -541,14 +541,8 @@ async def admin_close_all() -> dict:
                 errors.append(f"trade {trade.id}: price unavailable")
                 continue
             from db.models import close_trade as _close_trade
-            pnl_usd = (price / trade.entry_price - 1) * trade.amount_usd
+            await _close_trade(trade.id, exit_price=round(price, 4))
             pnl_pct = (price / trade.entry_price - 1) * 100
-            await _close_trade(
-                trade.id,
-                exit_price=round(price, 4),
-                pnl_usd=round(pnl_usd, 4),
-                pnl_percent=round(pnl_pct, 4),
-            )
             closed += 1
             logger.info("Admin close-all: closed trade %d %s pnl=%+.2f%%",
                         trade.id, trade.symbol, pnl_pct)

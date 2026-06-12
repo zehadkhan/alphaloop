@@ -97,14 +97,8 @@ async def force_close_stale_positions() -> int:
             continue
 
         age = _age(trade)
-        pnl_usd = (current_price / trade.entry_price - 1) * trade.amount_usd
+        await close_trade(trade.id, exit_price=round(current_price, 4))
         pnl_pct = (current_price / trade.entry_price - 1) * 100
-        await close_trade(
-            trade.id,
-            exit_price=round(current_price, 4),
-            pnl_usd=round(pnl_usd, 4),
-            pnl_percent=round(pnl_pct, 4),
-        )
         logger.info(
             "[Competition] Force-closed stale trade id=%d  symbol=%s  age=%.1fh  pnl=%+.2f%%",
             trade.id, trade.symbol, age.total_seconds() / 3600, pnl_pct,

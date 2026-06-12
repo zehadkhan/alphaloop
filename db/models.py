@@ -262,25 +262,41 @@ async def close_trade(
     trade_id: int,
     *,
     exit_price: float,
-    pnl_usd: float,
-    pnl_percent: float,
+    pnl_usd: float | None = None,
+    pnl_percent: float | None = None,
     tx_hash: str | None = None,
 ) -> None:
     async with SessionLocal() as session:
+        trade = await session.get(Trade, trade_id)
+        if trade is None:
+            logger.warning("close_trade: trade id=%d not found", trade_id)
+            return
+
+        # Always recalculate PnL from prices — never trust caller's value
+        # (avoids silent 0.0 bugs when price didn't change or pnl was omitted)
+        calc_pnl_usd = round((exit_price / trade.entry_price - 1) * trade.amount_usd, 4)
+        calc_pnl_pct = round((exit_price / trade.entry_price - 1) * 100, 4)
+
+        # Preserve dry_run status — close_trade is called for both real and
+        # simulated trades; changing "dry_run" to "executed" would misrepresent
+        # simulation results in the UI.
+        new_status = trade.status if trade.status == "dry_run" else "executed"
+
         await session.execute(
             update(Trade)
             .where(Trade.id == trade_id)
             .values(
-                exit_price=exit_price,
-                pnl_usd=pnl_usd,
-                pnl_percent=pnl_percent,
+                exit_price=round(exit_price, 4),
+                pnl_usd=calc_pnl_usd,
+                pnl_percent=calc_pnl_pct,
                 tx_hash=tx_hash,
-                status="executed",
+                status=new_status,
                 closed_at=_now(),
             )
         )
         await session.commit()
-        logger.debug("Closed trade id=%d pnl_usd=%.2f", trade_id, pnl_usd)
+        logger.info("Closed trade id=%d  entry=%.4f exit=%.4f pnl=%+.4f (%.4f%%)",
+                    trade_id, trade.entry_price, exit_price, calc_pnl_usd, calc_pnl_pct)
 
 
 async def get_today_pnl() -> float:

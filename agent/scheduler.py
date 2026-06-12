@@ -112,14 +112,7 @@ async def monitor_open_trades() -> dict:
             reason = "stop_loss"
 
         if exit_price is not None:
-            pnl_usd = (exit_price / trade.entry_price - 1) * trade.amount_usd
-            pnl_pct = (exit_price / trade.entry_price - 1) * 100
-            await close_trade(
-                trade.id,
-                exit_price=round(exit_price, 4),
-                pnl_usd=round(pnl_usd, 4),
-                pnl_percent=round(pnl_pct, 4),
-            )
+            await close_trade(trade.id, exit_price=round(exit_price, 4))
             logger.info(
                 "[Monitor] Closed trade id=%d  %s  entry=%.4f → exit=%.4f  pnl=%+.2f%%",
                 trade.id, reason, trade.entry_price, exit_price, pnl_pct,
