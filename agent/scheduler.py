@@ -113,6 +113,7 @@ async def monitor_open_trades() -> dict:
 
         if exit_price is not None:
             await close_trade(trade.id, exit_price=round(exit_price, 4))
+            pnl_pct = (exit_price / trade.entry_price - 1) * 100
             logger.info(
                 "[Monitor] Closed trade id=%d  %s  entry=%.4f → exit=%.4f  pnl=%+.2f%%",
                 trade.id, reason, trade.entry_price, exit_price, pnl_pct,
@@ -176,7 +177,10 @@ async def _run_cycle_impl() -> dict:
     base = symbol
 
     # ── Pre-cycle: close any TP/SL hits from open trades ─────────────────
-    await monitor_open_trades()
+    try:
+        await monitor_open_trades()
+    except Exception as _mon_exc:
+        logger.error("[Cycle] Pre-cycle monitor error (non-fatal): %s", _mon_exc)
 
     # ── Competition: force-close stale positions (ensures daily trade) ────
     if config.COMPETITION_MODE:
