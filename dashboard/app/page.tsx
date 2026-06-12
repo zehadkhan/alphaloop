@@ -13,7 +13,9 @@ import OpenPositions from "@/components/OpenPositions";
 import EquityCurve from "@/components/EquityCurve";
 import LiveChart from "@/components/LiveChart";
 import CompetitionPanel from "@/components/CompetitionPanel";
-import type { Health, AgentStatus, Trade, Strategy, AgentRun, RunResult, CompetitionStatus, ActivityItem, BotConfig } from "@/types";
+import TokenScannerPanel from "@/components/TokenScannerPanel";
+import TwakStatusCard from "@/components/TwakStatusCard";
+import type { Health, AgentStatus, Trade, Strategy, AgentRun, RunResult, CompetitionStatus, ActivityItem, BotConfig, TwakStatus } from "@/types";
 
 type Notification = {
   id: number;
@@ -60,6 +62,7 @@ export default function Dashboard() {
   const [activity, setActivity]     = useState<ActivityItem[]>([]);
   const [botConfig, setBotConfig]   = useState<BotConfig | null>(null);
   const [competition, setCompetition] = useState<CompetitionStatus | null>(null);
+  const [twakStatus, setTwakStatus]   = useState<TwakStatus | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [loading, setLoading]       = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -79,7 +82,7 @@ export default function Dashboard() {
   const fetchAll = useCallback(async (silent = false) => {
     if (!silent) setRefreshing(true);
     try {
-      const [h, s, t, st, r, comp, act, cfg] = await Promise.allSettled([
+      const [h, s, t, st, r, comp, act, cfg, twak] = await Promise.allSettled([
         fetch("/api/proxy/health").then((r) => r.json()),
         fetch("/api/proxy/status").then((r) => r.json()),
         fetch("/api/proxy/trades?limit=50").then((r) => r.json()),
@@ -88,6 +91,7 @@ export default function Dashboard() {
         fetch("/api/proxy/competition").then((r) => r.json()),
         fetch("/api/proxy/activity?limit=20").then((r) => r.json()),
         fetch("/api/proxy/admin/config").then((r) => r.json()),
+        fetch("/api/proxy/twak").then((r) => r.json()),
       ]);
 
       if (h.status   === "fulfilled") setHealth(h.value as Health);
@@ -100,6 +104,8 @@ export default function Dashboard() {
       if (act.status === "fulfilled") setActivity((act.value as { items: ActivityItem[] }).items ?? []);
       if (cfg.status === "fulfilled" && !(cfg.value as { error?: string }).error)
         setBotConfig(cfg.value as BotConfig);
+      if (twak.status === "fulfilled" && !(twak.value as { error?: string }).error)
+        setTwakStatus(twak.value as TwakStatus);
 
       setLastRefresh(new Date());
     } catch { /* silently fail — UI shows stale data */ } finally {
@@ -218,6 +224,8 @@ export default function Dashboard() {
           </div>
           <div className="space-y-5">
             {competition && <CompetitionPanel status={competition} />}
+            <TwakStatusCard status={twakStatus} />
+            <TokenScannerPanel competitionMode={status?.competition_mode ?? false} />
           </div>
         </div>
 

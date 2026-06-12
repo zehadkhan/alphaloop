@@ -113,3 +113,33 @@ export type RunResult = {
   reason?: string;
   error?: string;
 };
+
+export type TokenScanToken = {
+  symbol: string;
+  score: number;
+  change_24h: number;
+  volume_usdt: number;
+  rsi: number;
+  price: number;
+};
+
+export type TokenScanResult = {
+  top_tokens: TokenScanToken[];
+  scanned: number;
+};
+
+export type TwakStatus = {
+  twak_configured: boolean;
+  twak_url: string | null;
+  wallet_name: string;
+  wallet_address: string | null;
+  registration: Record<string, unknown>;
+  balance: Record<string, { price_usdt?: number }>;
+  guardrails: {
+    max_position_usd: number;
+    max_daily_loss_usd: number;
+    max_drawdown_pct: number;
+    max_position_hold_hours: number;
+    eligible_tokens: string[];
+  };
+};
