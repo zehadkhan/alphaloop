@@ -1,0 +1,69 @@
+services:
+
+  # ── Trust Wallet Agent Kit (TWAK) ───────────────────────────────────────
+  twak:
+    build:
+      context: .
+      dockerfile: Dockerfile.twak
+    container_name: alphaloop-twak
+    environment:
+      - AGENT_PRIVATE_KEY=${AGENT_PRIVATE_KEY}
+      - TWAK_WALLET_NAME=${TWAK_WALLET_NAME:-alphaloop}
+    volumes:
+      - twak-data:/root/.config/twak
+    ports:
+      - "1337:3000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # ── AlphaLoop Agent (FastAPI) ────────────────────────────────────────────
+  alphaloop:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: alphaloop
+    ports:
+      - "8000:8000"
+    volumes:
+      - alphaloop-storage:/app/storage
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:////app/storage/alphaloop.db
+      - TWAK_REST_URL=http://twak:3000
+      - SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+      - REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+    depends_on:
+      twak:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ── Dashboard (Next.js) ──────────────────────────────────────────────────
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: alphaloop-dashboard
+    ports:
+      - "3001:3001"
+    environment:
+      - BACKEND_URL=http://alphaloop:8000
+    depends_on:
+      alphaloop:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  twak-data:
+  alphaloop-storage:
