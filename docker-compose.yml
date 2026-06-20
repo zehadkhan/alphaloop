@@ -7,6 +7,8 @@ services:
       dockerfile: Dockerfile.twak
     container_name: alphaloop-twak
     environment:
+      - TWAK_ACCESS_ID=${TWAK_ACCESS_ID}
+      - TWAK_HMAC_SECRET=${TWAK_HMAC_SECRET}
       - AGENT_PRIVATE_KEY=${AGENT_PRIVATE_KEY}
       - TWAK_WALLET_NAME=${TWAK_WALLET_NAME:-alphaloop}
     volumes:
