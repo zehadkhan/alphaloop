@@ -1,6 +1,6 @@
 FROM node:20-slim
 
-RUN npm install -g @trustwallet/agent-kit
+RUN npm install -g @trustwallet/cli
 
 COPY scripts/twak-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
