@@ -16,3 +16,6 @@ dashboard/.env.local
 
 # Claude metadata
 .claude/
+
+# Reference projects (competition repos for research only)
+ref-projects/
