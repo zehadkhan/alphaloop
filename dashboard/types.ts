@@ -48,6 +48,14 @@ export type Health = {
   bnb_price: number | null;
 };
 
+export type CompassAxes = {
+  trend: number;
+  momentum: number;
+  sentiment: number;
+  volatility: number;
+  stress: number;
+};
+
 export type AgentStatus = {
   environment: string;
   trading_pair: string;
@@ -58,6 +66,11 @@ export type AgentStatus = {
   signing_backend: "twak" | "web3";
   last_run: AgentRun | null;
   scheduled_jobs: Array<{ id: string; next_run: string }>;
+  compass?: {
+    compass_score: number;
+    regime: string;
+    axes: CompassAxes;
+  } | null;
 };
 
 export type CompetitionStatus = {
@@ -68,6 +81,9 @@ export type CompetitionStatus = {
   min_trades_met: boolean;
   drawdown_pct: number;
   drawdown_halt: boolean;
+  drawdown_zone?: string;
+  drawdown_zone_label?: string;
+  drawdown_size_mult?: number;
   today_pnl: number;
   open_positions: number;
   stale_positions: number[];

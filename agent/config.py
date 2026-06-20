@@ -53,6 +53,12 @@ class Config:
     MAX_DRAWDOWN_PCT: float = float(os.getenv("MAX_DRAWDOWN_PCT", "25"))        # halt at 25%, DQ at 30%
     MAX_POSITION_HOLD_HOURS: float = float(os.getenv("MAX_POSITION_HOLD_HOURS", "20"))  # force-close stale
 
+    # Edge-Verified Adaptive Trading — new knobs
+    # Hysteresis margin: a new token must beat the held token's score by this much to displace it
+    HYSTERESIS_MARGIN: float = float(os.getenv("HYSTERESIS_MARGIN", "0.15"))
+    # Round-trip cost estimate: TWAK fee ~0.5% + slippage ~0.3% = 0.8%
+    ROUND_TRIP_COST_PCT: float = float(os.getenv("ROUND_TRIP_COST_PCT", "0.008"))
+
     @property
     def is_testnet(self) -> bool:
         return self.ENVIRONMENT == "testnet"

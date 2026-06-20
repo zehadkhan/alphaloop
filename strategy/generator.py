@@ -45,6 +45,8 @@ Analyze the following market data for {pair} and produce a trading strategy.
 
 ## Technical Indicators — 4h (entry timing){indicators_4h_section}
 
+## 5-Axis Market Compass (AlphaLoop regime engine){compass_section}
+
 ## Market Conditions
 - Trading pair       : {pair}
 - Current conditions : {conditions}
@@ -127,6 +129,7 @@ class StrategyGenerator:
         indicators: dict,
         indicators_4h: dict | None = None,
         extra_instruction: str | None = None,
+        compass: dict | None = None,
     ) -> dict:
         """Call Claude and return a validated strategy dict.
 
@@ -135,7 +138,7 @@ class StrategyGenerator:
             action != HOLD and confidence >= CONFIDENCE_THRESHOLD.
         """
         pair   = market_data.get("symbol", symbol) + "/USDT"
-        prompt = self._build_prompt(pair, market_data, indicators, indicators_4h, extra_instruction)
+        prompt = self._build_prompt(pair, market_data, indicators, indicators_4h, extra_instruction, compass)
         raw    = await self._call_claude(prompt)
         strategy = self._parse_and_validate(raw)
         strategy["should_execute"] = (
@@ -164,6 +167,7 @@ class StrategyGenerator:
         indicators: dict,
         indicators_4h: dict | None = None,
         extra_instruction: str | None = None,
+        compass: dict | None = None,
     ) -> str:
         price = market_data.get("price", 0.0)
 
@@ -186,6 +190,23 @@ class StrategyGenerator:
         sell_entry = price * 1.01
         sell_sl    = sell_entry * 1.04
         sell_tp    = sell_entry * 0.93
+
+        # Build compass section if available
+        if compass:
+            axes = compass.get("axes", {})
+            profile = compass.get("profile", {})
+            compass_section = (
+                f"\n- Compass Score     : {compass.get('compass_score', 0):.1f} / 50"
+                f"\n- Regime            : {compass.get('regime', 'UNKNOWN')}  ({profile.get('label', '')})"
+                f"\n- Trend Axis        : {axes.get('trend', 0):.1f} / 10"
+                f"\n- Momentum Axis     : {axes.get('momentum', 0):.1f} / 10"
+                f"\n- Sentiment Axis    : {axes.get('sentiment', 0):.1f} / 10"
+                f"\n- Volatility Axis   : {axes.get('volatility', 0):.1f} / 10"
+                f"\n- Stress Axis       : {axes.get('stress', 0):.1f} / 10  (10 = no stress)"
+                f"\n- Regime guidance   : {profile.get('guidance', '')}"
+            )
+        else:
+            compass_section = "\n- (not available this cycle)"
 
         # Build 4h section string if data is available
         if indicators_4h:
@@ -222,6 +243,7 @@ class StrategyGenerator:
             sell_sl=sell_sl,
             sell_tp=sell_tp,
             indicators_4h_section=indicators_4h_section,
+            compass_section=compass_section,
         )
         if extra_instruction:
             base_prompt += f"\n\n## Admin Instructions (MUST follow)\n{extra_instruction}\n"

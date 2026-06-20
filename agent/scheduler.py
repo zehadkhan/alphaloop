@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time as _time
 from datetime import datetime, timezone
 
 import httpx
@@ -13,11 +14,13 @@ from apscheduler.triggers.interval import IntervalTrigger
 from agent.config import config
 from data.cmc_client import CMCClient
 from data.indicators import compute_indicators, extract_last_row, extract_4h_context
+from data.regime import MarketCompass
 from strategy.generator import StrategyGenerator
 from strategy.backtester import Backtester
 from execution.wallet import WalletAgent
 from execution.pancakeswap import PancakeSwapExecutor
 from agent.competition import check_drawdown, force_close_stale_positions
+from agent.proof import build_proof, commit_proof_onchain
 from data.token_scanner import TokenScanner
 from db.models import (
     create_agent_run,
@@ -26,6 +29,7 @@ from db.models import (
     update_strategy_backtest,
     create_trade,
     close_trade,
+    update_trade_proof,
     list_open_buy_trades,
     get_today_pnl,
     get_daily_trade_count,
@@ -37,8 +41,10 @@ logger = logging.getLogger(__name__)
 
 scheduler = AsyncIOScheduler()
 
-# Prevents a second cycle from firing while one is still running.
 _cycle_lock = asyncio.Lock()
+
+# Last computed compass — exposed via /status endpoint
+_last_compass: dict | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +52,6 @@ _cycle_lock = asyncio.Lock()
 # ---------------------------------------------------------------------------
 
 async def _get_token_price(symbol: str) -> float | None:
-    """Fetch the current {symbol}/USDT spot price from Binance (no auth required)."""
     pair = symbol.upper() + "USDT"
     try:
         async with httpx.AsyncClient(timeout=8) as client:
@@ -67,16 +72,11 @@ async def _get_bnb_price() -> float | None:
 
 
 async def monitor_open_trades() -> dict:
-    """Check every open BUY position against its TP/SL and close if triggered.
-
-    Runs on its own 5-minute schedule AND at the start of each agent cycle so
-    PnL is updated before the position guard decides whether to open a new trade.
-    """
+    """Check every open BUY position against its TP/SL and close if triggered."""
     trades = await list_open_buy_trades()
     if not trades:
         return {"checked": 0, "closed": 0}
 
-    # Fetch price once per unique symbol (token scanner may trade non-BNB tokens)
     symbols = {t.symbol for t in trades}
     prices: dict[str, float] = {}
     for sym in symbols:
@@ -123,11 +123,7 @@ async def monitor_open_trades() -> dict:
     price_summary = {s: round(p, 4) for s, p in prices.items()}
     logger.info("[Monitor] Checked %d open trade(s), closed %d  prices=%s",
                 len(trades), closed_count, price_summary)
-    return {
-        "checked": len(trades),
-        "closed": closed_count,
-        "prices": price_summary,
-    }
+    return {"checked": len(trades), "closed": closed_count, "prices": price_summary}
 
 
 # ---------------------------------------------------------------------------
@@ -135,11 +131,6 @@ async def monitor_open_trades() -> dict:
 # ---------------------------------------------------------------------------
 
 async def run_agent_cycle() -> dict:
-    """Execute one full agent cycle end-to-end.
-
-    Returns a summary dict so both the scheduler and the /run endpoint can
-    surface the result without duplicating logic.
-    """
     if _cycle_lock.locked():
         logger.warning("Cycle already running — skipping this tick")
         return {"status": "skipped", "reason": "cycle_already_running"}
@@ -148,11 +139,12 @@ async def run_agent_cycle() -> dict:
         return await _run_cycle_impl()
 
 
-async def _run_cycle_impl() -> dict:
+async def _run_cycle_impl() -> dict:  # noqa: C901
+    global _last_compass
     quote = "USDT"
 
     # ── Read runtime admin config overrides ───────────────────────────────
-    bot_cfg = await get_bot_config()
+    bot_cfg   = await get_bot_config()
     if bot_cfg.paused:
         logger.info("Bot is PAUSED by admin — skipping cycle")
         return {"status": "skipped", "reason": "admin_paused"}
@@ -161,12 +153,12 @@ async def _run_cycle_impl() -> dict:
     _min_conf     = bot_cfg.min_confidence    or config.MIN_CONFIDENCE
     _claude_instr = bot_cfg.claude_instruction or None
 
-    # ── Token selection: scan eligible tokens and pick best momentum ──────
+    # ── Token selection: scan eligible tokens with hysteresis ─────────────
     if config.COMPETITION_MODE and len(config.ELIGIBLE_TOKENS) > 1:
         try:
-            scanner = TokenScanner(config.ELIGIBLE_TOKENS)
+            scanner    = TokenScanner(config.ELIGIBLE_TOKENS)
             top_tokens = await scanner.scan(top_n=config.TOKEN_SCAN_TOP_N)
-            symbol = top_tokens[0]["symbol"]
+            symbol     = top_tokens[0]["symbol"]
             logger.info("[Scanner] Selected token: %s  score=%.3f", symbol, top_tokens[0]["score"])
         except Exception as exc:
             logger.warning("[Scanner] Token scan failed (%s) — falling back to default", exc)
@@ -176,163 +168,258 @@ async def _run_cycle_impl() -> dict:
 
     base = symbol
 
-    # ── Pre-cycle: close any TP/SL hits from open trades ─────────────────
+    # ── Pre-cycle: close any TP/SL hits ──────────────────────────────────
     try:
         await monitor_open_trades()
     except Exception as _mon_exc:
         logger.error("[Cycle] Pre-cycle monitor error (non-fatal): %s", _mon_exc)
 
-    # ── Competition: force-close stale positions (ensures daily trade) ────
+    # ── Competition: force-close stale positions ──────────────────────────
     if config.COMPETITION_MODE:
         stale_closed = await force_close_stale_positions()
         if stale_closed:
             logger.info("[Competition] Force-closed %d stale position(s)", stale_closed)
 
-    # ── Competition: drawdown circuit breaker ─────────────────────────────
-    if config.COMPETITION_MODE:
-        drawdown = await check_drawdown()
-        if drawdown["halt"]:
-            logger.critical(
-                "[Competition] Trading HALTED: drawdown=%.1f%% ≥ %.1f%%",
-                drawdown["drawdown_pct"], drawdown["limit_pct"],
-            )
-            return _result("skipped", 0, reason="drawdown_halt",
-                           drawdown_pct=drawdown["drawdown_pct"])
-
-    # ── Competition: daily trade guarantee (override confidence if needed) ─
-    _force_execute = False
-    if config.COMPETITION_MODE:
-        trades_today = await get_daily_trade_count()
-        utc_hour = datetime.now(timezone.utc).hour
-        if trades_today == 0 and utc_hour >= 22:
-            _force_execute = True
-            logger.warning(
-                "[Competition] No trades today and hour=%d UTC — forcing execution this cycle",
-                utc_hour,
-            )
-
     # ── Position guard: one open BUY at a time ────────────────────────────
     open_buys = await list_open_buy_trades()
     if open_buys:
-        logger.info(
-            "Position guard: %d open BUY trade(s) — skipping new entry",
-            len(open_buys),
-        )
+        logger.info("Position guard: %d open BUY trade(s) — skipping new entry", len(open_buys))
         return _result("skipped", 0, reason="open_position", open_trades=len(open_buys))
 
     # ── Daily loss guard ──────────────────────────────────────────────────
     today_pnl = await get_today_pnl()
     if today_pnl < -config.MAX_DAILY_LOSS_USD:
         logger.warning(
-            "Daily loss limit breached: today_pnl=%.2f  limit=-%.2f — pausing trading",
+            "Daily loss limit breached: today_pnl=%.2f  limit=-%.2f",
             today_pnl, config.MAX_DAILY_LOSS_USD,
         )
         return _result("skipped", 0, reason="daily_loss_limit",
                        today_pnl=today_pnl, limit=-config.MAX_DAILY_LOSS_USD)
 
+    # ── Competition: basic drawdown halt ──────────────────────────────────
+    if config.COMPETITION_MODE:
+        dd_pre = await check_drawdown()
+        if dd_pre["halt"]:
+            logger.critical(
+                "[Competition] Trading HALTED: drawdown=%.1f%%",
+                dd_pre["drawdown_pct"],
+            )
+            return _result("skipped", 0, reason="drawdown_halt",
+                           drawdown_pct=dd_pre["drawdown_pct"])
+
+    # ── Smart compliance window (3-tier, replaces hard UTC-22) ────────────
+    _force_execute    = False
+    _compliance_mode  = "normal"
+    if config.COMPETITION_MODE:
+        trades_today = await get_daily_trade_count()
+        utc_hour     = datetime.now(timezone.utc).hour
+        if trades_today == 0:
+            if utc_hour >= 23:
+                _force_execute   = True
+                _compliance_mode = "hard"
+                logger.warning(
+                    "[Compliance] HARD window (hour=%d UTC) — forcing execution this cycle",
+                    utc_hour,
+                )
+            elif utc_hour == 22:
+                _compliance_mode = "alert"
+                logger.warning(
+                    "[Compliance] ALERT window (hour=%d UTC) — relaxing confidence threshold",
+                    utc_hour,
+                )
+            elif utc_hour >= 18:
+                _compliance_mode = "soft"
+                logger.info(
+                    "[Compliance] SOFT window (hour=%d UTC) — hunting for a quality entry",
+                    utc_hour,
+                )
+
     run = await create_agent_run()
     strategies_generated = 0
-    trades_executed = 0
-    total_pnl = 0.0
+    trades_executed      = 0
+    total_pnl            = 0.0
     error_message: str | None = None
 
     try:
         logger.info("=== AlphaLoop cycle starting  run_id=%d  symbol=%s ===", run.id, symbol)
 
         # ── 1. Fetch market data ──────────────────────────────────────────
-        logger.info("[1/6] Fetching market data (daily + 4h)…")
+        logger.info("[1/7] Fetching market data…")
         async with CMCClient() as cmc:
             market_data = await cmc.get_quote(symbol)
-            # 60 daily candles: 50+ for SMA-50; backtester uses IS=45 + OOS=15
             ohlcv_data  = await cmc.get_ohlcv(symbol, time_period="daily", count=60)
-            # 100 × 4h candles ≈ last 17 days of intraday context
             try:
                 ohlcv_4h = await cmc.get_ohlcv(symbol, time_period="4h", count=100)
             except Exception as exc:
                 logger.warning("4h data fetch failed (%s) — continuing without it", exc)
                 ohlcv_4h = []
+            try:
+                global_metrics = await cmc.get_market_metrics()
+                btc_dominance  = float(global_metrics.get("btc_dominance", 48.0))
+            except Exception as exc:
+                logger.warning("Global metrics fetch failed (%s) — btc_dom=48%%", exc)
+                btc_dominance = 48.0
 
         logger.info(
-            "Market data fetched: price=%.4f  vol_24h=%.0f  change_24h=%+.2f%%",
-            market_data["price"],
-            market_data["volume_24h"],
-            market_data["percent_change_24h"],
+            "Market data: price=%.4f  vol_24h=%.0f  change_24h=%+.2f%%  btc_dom=%.2f%%",
+            market_data["price"], market_data["volume_24h"],
+            market_data["percent_change_24h"], btc_dominance,
         )
 
         # ── 2. Compute technical indicators ───────────────────────────────
-        logger.info("[2/6] Computing technical indicators…")
-        df = _ohlcv_to_dataframe(ohlcv_data)
-        df = compute_indicators(df)
+        logger.info("[2/7] Computing technical indicators…")
+        df         = _ohlcv_to_dataframe(ohlcv_data)
+        df         = compute_indicators(df)
         indicators = extract_last_row(df)
 
         indicators_4h: dict | None = None
         if ohlcv_4h:
-            df_4h = _ohlcv_to_dataframe(ohlcv_4h)
-            df_4h = compute_indicators(df_4h)
+            df_4h         = _ohlcv_to_dataframe(ohlcv_4h)
+            df_4h         = compute_indicators(df_4h)
             indicators_4h = extract_4h_context(df_4h)
-            logger.info(
-                "4h context: RSI=%.2f (%s)  trend=%s  MACD_hist=%.6f",
-                indicators_4h["rsi"], indicators_4h["rsi_state"],
-                indicators_4h["trend"], indicators_4h["macd_hist"],
-            )
 
         logger.info(
-            "Daily indicators: RSI=%.2f  MACD=%.6f  BB=[%.2f / %.2f / %.2f]  SMA20=%.2f  SMA50=%.2f",
-            indicators["rsi"],
-            indicators["macd"],
-            indicators["bb_lower"],
-            indicators["bb_middle"],
-            indicators["bb_upper"],
-            indicators["sma_20"],
-            indicators["sma_50"],
+            "Daily: RSI=%.2f  MACD_hist=%.6f  BB=[%.2f/%.2f/%.2f]  SMA20=%.2f  SMA50=%.2f",
+            indicators["rsi"], indicators["macd_hist"],
+            indicators["bb_lower"], indicators["bb_middle"], indicators["bb_upper"],
+            indicators["sma_20"], indicators["sma_50"],
         )
 
-        # ── 3. Generate strategy via LLM ──────────────────────────────────
-        logger.info("[3/6] Generating strategy via Claude (Anthropic)…")
+        # ── 3. 5-Axis Market Compass ──────────────────────────────────────
+        logger.info("[3/7] Computing 5-Axis Market Compass…")
+        compass = await MarketCompass().compute(
+            symbol=symbol,
+            indicators=indicators,
+            market_data=market_data,
+            btc_dominance=btc_dominance,
+            ohlcv_data=ohlcv_data,
+        )
+        _last_compass      = compass
+        compass_profile    = compass["profile"]
+        compass_score      = compass["compass_score"]
+
+        # RISK_OFF blocks all trades except hard compliance
+        if compass["regime"] == "RISK_OFF" and not _force_execute:
+            logger.warning(
+                "[Compass] RISK_OFF (score=%.1f) — skipping cycle", compass_score,
+            )
+            await _finish_run(run.id, 0, 0, 0.0, None)
+            return _result("skipped", run.id, reason="risk_off_regime",
+                           compass_score=compass_score)
+
+        # Drawdown zone cascade — compass gates applied here (post-compass)
+        drawdown_zone: dict = {"zone": "GREEN", "size_multiplier": 1.0, "compass_min": 0}
+        if config.COMPETITION_MODE:
+            dd_full       = await check_drawdown()
+            drawdown_zone = dd_full["zone"]
+            if drawdown_zone["zone"] == "ORANGE" and compass_score < 15:
+                logger.warning(
+                    "[Drawdown] ORANGE zone: compass_score=%.1f < 15 required — skip",
+                    compass_score,
+                )
+                await _finish_run(run.id, 0, 0, 0.0, None)
+                return _result("skipped", run.id, reason="orange_zone_low_compass",
+                               compass_score=compass_score)
+            if drawdown_zone["zone"] == "RED" and compass_score < 35:
+                logger.warning(
+                    "[Drawdown] RED zone: compass_score=%.1f < 35 required — skip",
+                    compass_score,
+                )
+                await _finish_run(run.id, 0, 0, 0.0, None)
+                return _result("skipped", run.id, reason="red_zone_low_compass",
+                               compass_score=compass_score)
+
+        # ── 4. Generate strategy via Claude ───────────────────────────────
+        logger.info("[4/7] Generating strategy via Claude…")
         async with StrategyGenerator() as gen:
-            strategy = await gen.generate(symbol, market_data, indicators, indicators_4h, _claude_instr)
+            strategy = await gen.generate(
+                symbol, market_data, indicators, indicators_4h,
+                _claude_instr, compass=compass,
+            )
 
         strategies_generated = 1
         logger.info(
-            "Strategy: action=%s  confidence=%.2f  entry=%.4f  sl=%.4f  tp=%.4f  execute=%s",
-            strategy["action"],
-            strategy["confidence"],
-            strategy["entry_price"],
-            strategy["stop_loss"],
-            strategy["take_profit"],
-            strategy["should_execute"],
+            "Strategy: action=%s  confidence=%.2f  entry=%.4f  sl=%.4f  tp=%.4f",
+            strategy["action"], strategy["confidence"],
+            strategy["entry_price"], strategy["stop_loss"], strategy["take_profit"],
         )
 
-        # ── 4. Gate: HOLD or low confidence ──────────────────────────────
-        if strategy["action"] == "HOLD" and not _force_execute:
+        # ── 5. Gate: compliance mode + confidence ─────────────────────────
+        if _compliance_mode == "hard" and strategy["action"] == "HOLD":
+            strategy["action"] = "BUY"
+            logger.warning("[Compliance] HARD: overriding HOLD → BUY")
+        elif _compliance_mode == "alert" and strategy["action"] == "HOLD":
+            strategy["action"] = "BUY"
+            logger.warning("[Compliance] ALERT: overriding HOLD → BUY")
+
+        if strategy["action"] == "HOLD":
             logger.info("Action=HOLD — no trade this cycle")
             await _finish_run(run.id, strategies_generated, 0, 0.0, None)
             return _result("skipped", run.id, reason="HOLD")
 
-        if strategy["action"] == "HOLD" and _force_execute:
-            strategy["action"] = "BUY"
-            logger.warning("[Competition] Overriding HOLD → BUY to guarantee daily trade")
+        # Confidence threshold: compliance mode and compass profile both affect it
+        if _compliance_mode == "hard":
+            min_confidence = 0.25
+        elif _compliance_mode == "alert":
+            min_confidence = 0.30
+        elif _compliance_mode == "soft":
+            min_confidence = min(0.45, compass_profile["min_confidence_override"])
+        else:
+            min_confidence = max(_min_conf, compass_profile["min_confidence_override"])
 
-        min_confidence = 0.3 if _force_execute else _min_conf
         if strategy["confidence"] < min_confidence:
             logger.info(
-                "Confidence %.2f < %.2f threshold — skipping",
-                strategy["confidence"], min_confidence,
+                "Confidence %.2f < %.2f threshold (%s mode) — skipping",
+                strategy["confidence"], min_confidence, _compliance_mode,
             )
             await _finish_run(run.id, strategies_generated, 0, 0.0, None)
             return _result("skipped", run.id, reason="low_confidence",
-                           confidence=strategy["confidence"])
+                           confidence=strategy["confidence"],
+                           threshold=min_confidence,
+                           compliance_mode=_compliance_mode)
+
+        # ── 6. Expected Edge Gate ─────────────────────────────────────────
+        if not _force_execute:
+            momentum_axis = compass["axes"].get("momentum", 5.0)
+            expected_edge = (
+                strategy["confidence"] * (momentum_axis / 10.0)
+                - config.ROUND_TRIP_COST_PCT
+            )
+            if expected_edge <= 0:
+                logger.info(
+                    "[EdgeGate] conf=%.2f × momentum=%.1f/10 − cost=%.1f%% = %.3f%% → SKIP",
+                    strategy["confidence"], momentum_axis,
+                    config.ROUND_TRIP_COST_PCT * 100, expected_edge * 100,
+                )
+                await _finish_run(run.id, strategies_generated, 0, 0.0, None)
+                return _result("skipped", run.id, reason="edge_gate_failed",
+                               expected_edge_pct=round(expected_edge * 100, 3))
+            logger.info(
+                "[EdgeGate] Edge = %.3f%% — cleared", expected_edge * 100,
+            )
+
+        # ── Build proof BEFORE execution (captures decision state) ────────
+        proof_ts = int(_time.time())
+        proof_string, proof_hash = build_proof(
+            unix_ts=proof_ts,
+            symbol=symbol,
+            compass=compass,
+            confidence=strategy["confidence"],
+            action=strategy["action"],
+            entry_price=strategy["entry_price"],
+        )
+        logger.info("[Proof] hash=%s", proof_hash[:16] + "…")
 
         # ── 5. Backtest ───────────────────────────────────────────────────
-        logger.info("[4/6] Running backtest on last 30 daily candles…")
+        logger.info("[5/7] Running backtest on last 30 daily candles…")
         backtest = Backtester().run(ohlcv_data, strategy)
         logger.info("Backtest: %s", backtest["summary"])
 
-        # ── 6. Persist strategy (always, even if rejected) ────────────────
+        # ── 6. Persist strategy ───────────────────────────────────────────
         db_strategy = await create_strategy({
-            "symbol":     symbol,
-            "action":     strategy["action"],
-            "confidence": strategy["confidence"],
+            "symbol":      symbol,
+            "action":      strategy["action"],
+            "confidence":  strategy["confidence"],
             "entry_price": strategy["entry_price"],
             "stop_loss":   strategy["stop_loss"],
             "take_profit": strategy["take_profit"],
@@ -347,8 +434,6 @@ async def _run_cycle_impl() -> dict:
             total_return=backtest["total_return_percent"],
             win_rate=backtest["win_rate"],
         )
-        logger.info("Strategy saved: id=%d  status=%s", db_strategy.id,
-                    "approved" if backtest["passed"] else "rejected")
 
         if not backtest["passed"]:
             logger.info("Backtest failed — skipping execution")
@@ -360,50 +445,46 @@ async def _run_cycle_impl() -> dict:
         if config.TWAK_REST_URL:
             from execution.twak_executor import TWAKExecutor
             executor = TWAKExecutor()
-            logger.info("[5/6] Executing swap via TWAK REST (%s)…", config.TWAK_REST_URL)
+            logger.info("[6/7] Executing swap via TWAK REST…")
         else:
             wallet   = WalletAgent()
             executor = PancakeSwapExecutor(wallet)
-            logger.info("[5/6] Executing swap on PancakeSwap V2 (BSC)…")
+            logger.info("[6/7] Executing swap on PancakeSwap V2…")
 
-        # BUY  = spend quote (USDT) to get base (BNB)
-        # SELL = spend base (BNB) to get quote (USDT)
         if strategy["action"] == "BUY":
             token_in, token_out = quote, base
         else:
             token_in, token_out = base, quote
 
-        # Scale position by confidence: 50–100% of MAX_POSITION_SIZE_USD
-        position_usd = round(
-            _pos_size_usd * max(0.5, min(1.0, strategy["confidence"])), 2
-        )
+        # Position sizing: confidence × compass regime × drawdown zone
+        base_position  = _pos_size_usd * max(0.5, min(1.0, strategy["confidence"]))
+        compass_mult   = compass_profile.get("max_position_pct", 1.0)
+        zone_mult      = drawdown_zone.get("size_multiplier", 1.0)
+        position_usd   = round(base_position * compass_mult * zone_mult, 2)
+        position_usd   = max(position_usd, 0.01)
+
         logger.info(
-            "Position sizing: confidence=%.2f → $%.2f (max $%.2f)",
-            strategy["confidence"], position_usd, _pos_size_usd,
+            "[7/7] Position sizing: base=$%.2f × compass(%.0f%%) × zone(%.0f%%) = $%.2f  "
+            "[regime=%s  zone=%s]",
+            base_position, compass_mult * 100, zone_mult * 100, position_usd,
+            compass["regime"], drawdown_zone["zone"],
         )
 
         swap = await executor.swap(token_in, token_out, position_usd)
         trades_executed = 1
 
         logger.info(
-            "Swap %s: %s %.6f → %s %.6f  price=%.4f  gas=%d  status=%s  tx=%s",
+            "Swap %s: %s %.6f → %s %.6f  price=%.4f  status=%s  tx=%s",
             strategy["action"],
             token_in,  swap["amount_in"],
             token_out, swap["amount_out"],
-            swap["price"],
-            swap["gas_used"],
-            swap["status"],
-            swap["tx_hash"],
+            swap["price"], swap["status"], swap["tx_hash"],
         )
 
-        # ── 8. Compute PnL (SELL only — BUY PnL realised on future close) ─
         pnl_usd, pnl_pct = _compute_pnl(strategy["action"], swap, position_usd)
-        total_pnl = pnl_usd
+        total_pnl        = pnl_usd
 
-        # ── 9. Save trade ─────────────────────────────────────────────────
         trade_status = "executed" if swap["status"] == "success" else swap["status"]
-
-        logger.info("[6/6] Saving trade to database…")
         trade = await create_trade({
             "strategy_id": db_strategy.id,
             "symbol":      symbol,
@@ -416,11 +497,25 @@ async def _run_cycle_impl() -> dict:
             "tx_hash":     swap["tx_hash"],
             "status":      trade_status,
             "executed_at": datetime.now(timezone.utc),
+            "proof_hash":  proof_hash,
+            "proof_string": proof_string,
         })
 
+        # Commit proof on-chain (non-blocking — never delays trade confirmation)
+        proof_tx_hash = await commit_proof_onchain(
+            trade.id, proof_hash, dry_run=config.DRY_RUN,
+        )
+        if proof_tx_hash:
+            await update_trade_proof(
+                trade.id,
+                proof_string=proof_string,
+                proof_hash=proof_hash,
+                proof_tx_hash=proof_tx_hash,
+            )
+
         logger.info(
-            "=== Cycle complete  run_id=%d  trade_id=%d  pnl_usd=%+.4f ===",
-            run.id, trade.id, pnl_usd,
+            "=== Cycle complete  run_id=%d  trade_id=%d  pnl_usd=%+.4f  proof=%s… ===",
+            run.id, trade.id, pnl_usd, proof_hash[:12],
         )
 
         await _finish_run(run.id, strategies_generated, trades_executed, total_pnl, None)
@@ -433,6 +528,10 @@ async def _run_cycle_impl() -> dict:
             swap_status=swap["status"],
             pnl_usd=pnl_usd,
             backtest=backtest["summary"],
+            compass_score=compass_score,
+            regime=compass["regime"],
+            drawdown_zone=drawdown_zone["zone"],
+            proof_hash=proof_hash,
         )
 
     except Exception as exc:
@@ -487,11 +586,6 @@ def _ohlcv_to_dataframe(ohlcv_data: list[dict]) -> pd.DataFrame:
 
 
 def _compute_pnl(action: str, swap: dict, position_usd: float) -> tuple[float, float]:
-    """Return (pnl_usd, pnl_percent) for a completed swap.
-
-    For BUY trades pnl is unrealised and returned as (0.0, 0.0).
-    For SELL trades pnl = USDT received − position_usd spent.
-    """
     if action != "SELL":
         return 0.0, 0.0
     received_usd = float(swap["amount_out"])

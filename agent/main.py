@@ -239,6 +239,15 @@ async def status() -> dict:
         for j in scheduler.get_jobs()
     ]
 
+    from agent.scheduler import _last_compass
+    compass_summary: dict | None = None
+    if _last_compass:
+        compass_summary = {
+            "compass_score": _last_compass.get("compass_score"),
+            "regime":        _last_compass.get("regime"),
+            "axes":          _last_compass.get("axes"),
+        }
+
     return {
         "environment":       config.ENVIRONMENT,
         "trading_pair":      config.TRADING_PAIR,
@@ -249,6 +258,7 @@ async def status() -> dict:
         "signing_backend":   "twak" if config.TWAK_REST_URL else "web3",
         "last_run":          last_run,
         "scheduled_jobs":    jobs,
+        "compass":           compass_summary,
     }
 
 

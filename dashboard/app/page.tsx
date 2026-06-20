@@ -223,7 +223,7 @@ export default function Dashboard() {
             <ActivityFeed items={activity} />
           </div>
           <div className="space-y-5">
-            {competition && <CompetitionPanel status={competition} />}
+            {competition && <CompetitionPanel status={competition} agentStatus={status} />}
             <TwakStatusCard status={twakStatus} />
             <TokenScannerPanel competitionMode={status?.competition_mode ?? false} />
           </div>

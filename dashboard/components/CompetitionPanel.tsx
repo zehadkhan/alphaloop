@@ -1,16 +1,33 @@
 "use client";
 
-import { Shield, TrendingDown, Calendar, BarChart2, AlertOctagon, Trophy } from "lucide-react";
+import { Shield, TrendingDown, Calendar, BarChart2, AlertOctagon, Trophy, Activity } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import type { CompetitionStatus } from "@/types";
+import type { CompetitionStatus, AgentStatus } from "@/types";
 
 type Props = {
   status: CompetitionStatus | null;
+  agentStatus?: AgentStatus | null;
+};
+
+const ZONE_COLORS: Record<string, string> = {
+  GREEN:  "bg-profit/15 text-profit border-profit/30",
+  YELLOW: "bg-amber-400/15 text-amber-400 border-amber-400/30",
+  ORANGE: "bg-orange-500/15 text-orange-400 border-orange-500/30",
+  RED:    "bg-loss/15 text-loss border-loss/30",
+  HALT:   "bg-loss/20 text-loss border-loss/40",
+};
+
+const REGIME_COLORS: Record<string, string> = {
+  MOMENTUM_RIDE:    "text-profit",
+  TREND_CONFIRM:    "text-profit/80",
+  NEUTRAL_CAUTIOUS: "text-amber-400",
+  DEFENSIVE:        "text-orange-400",
+  RISK_OFF:         "text-loss",
 };
 
 function DrawdownBar({ pct }: { pct: number }) {
-  const fill = pct < 15 ? "bg-profit" : pct < 25 ? "bg-amber-400" : "bg-loss";
+  const fill  = pct < 8 ? "bg-profit" : pct < 15 ? "bg-amber-400" : pct < 22 ? "bg-orange-400" : "bg-loss";
   const width = Math.min(100, (pct / 30) * 100);
   return (
     <div className="w-full h-1 rounded-full bg-white/5 overflow-hidden mt-1.5">
@@ -22,18 +39,41 @@ function DrawdownBar({ pct }: { pct: number }) {
   );
 }
 
+function CompassBar({ score, regime }: { score: number; regime: string }) {
+  const width  = Math.min(100, (score / 50) * 100);
+  const fill   =
+    score >= 35 ? "bg-profit" :
+    score >= 25 ? "bg-profit/70" :
+    score >= 15 ? "bg-amber-400" :
+    score >= 8  ? "bg-orange-400" : "bg-loss";
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between text-[10px]">
+        <span className="text-text-muted font-medium uppercase tracking-widest flex items-center gap-1">
+          <Activity size={9} />
+          Compass
+        </span>
+        <span className={cn("font-bold font-mono", REGIME_COLORS[regime] ?? "text-text-primary")}>
+          {score.toFixed(1)}/50
+        </span>
+      </div>
+      <div className="w-full h-1.5 rounded-full bg-white/5 overflow-hidden">
+        <div
+          className={cn("h-full rounded-full transition-all duration-700", fill)}
+          style={{ width: `${width}%` }}
+        />
+      </div>
+      <p className={cn("text-[10px] font-medium", REGIME_COLORS[regime] ?? "text-text-muted")}>
+        {regime.replace(/_/g, " ")}
+      </p>
+    </div>
+  );
+}
+
 function Metric({
-  label,
-  value,
-  sub,
-  color,
-  icon: Icon,
+  label, value, sub, color, icon: Icon,
 }: {
-  label: string;
-  value: string;
-  sub?: string;
-  color: string;
-  icon?: React.ElementType;
+  label: string; value: string; sub?: string; color: string; icon?: React.ElementType;
 }) {
   return (
     <div className="space-y-0.5">
@@ -49,15 +89,18 @@ function Metric({
   );
 }
 
-export default function CompetitionPanel({ status }: Props) {
+export default function CompetitionPanel({ status, agentStatus }: Props) {
   if (!status) return null;
 
   const ddColor =
-    status.drawdown_pct < 15 ? "text-profit" :
-    status.drawdown_pct < 25 ? "text-amber-400" : "text-loss";
+    status.drawdown_pct < 8  ? "text-profit" :
+    status.drawdown_pct < 15 ? "text-amber-400" :
+    status.drawdown_pct < 22 ? "text-orange-400" : "text-loss";
 
   const tradesToday = status.trades_today;
   const todayColor  = status.min_trades_met ? "text-profit" : "text-amber-400";
+  const zone        = status.drawdown_zone ?? "GREEN";
+  const compass     = agentStatus?.compass;
 
   return (
     <Card className={cn(status.drawdown_halt && "border-loss/40")}>
@@ -67,11 +110,22 @@ export default function CompetitionPanel({ status }: Props) {
             <Shield size={12} className="text-accent" />
             Competition
           </CardTitle>
-          {status.in_trading_window ? (
-            <span className="badge-live text-[10px]">LIVE</span>
-          ) : (
-            <span className="text-[10px] text-text-muted font-medium">Jun 22–28</span>
-          )}
+          <div className="flex items-center gap-2">
+            {/* Drawdown zone badge */}
+            {zone !== "GREEN" && (
+              <span className={cn(
+                "text-[9px] font-bold px-1.5 py-0.5 rounded border",
+                ZONE_COLORS[zone] ?? "text-text-muted",
+              )}>
+                {zone}
+              </span>
+            )}
+            {status.in_trading_window ? (
+              <span className="badge-live text-[10px]">LIVE</span>
+            ) : (
+              <span className="text-[10px] text-text-muted font-medium">Jun 22–28</span>
+            )}
+          </div>
         </div>
       </CardHeader>
 
@@ -83,6 +137,22 @@ export default function CompetitionPanel({ status }: Props) {
             <AlertOctagon size={12} />
             TRADING HALTED — drawdown limit hit
           </div>
+        )}
+
+        {/* Zone warning (non-green, non-halt) */}
+        {!status.drawdown_halt && zone !== "GREEN" && status.drawdown_zone_label && (
+          <div className={cn(
+            "flex items-center gap-2 px-3 py-2 rounded-xl border text-[11px] font-medium",
+            ZONE_COLORS[zone] ?? "",
+          )}>
+            <TrendingDown size={11} />
+            {status.drawdown_zone_label}
+          </div>
+        )}
+
+        {/* Compass bar (if available) */}
+        {compass && (
+          <CompassBar score={compass.compass_score} regime={compass.regime} />
         )}
 
         {/* Metrics grid */}

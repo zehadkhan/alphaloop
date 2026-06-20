@@ -96,6 +96,11 @@ class Trade(Base):
     executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # On-chain decision proof (verifiability layer)
+    proof_string:  Mapped[str | None] = mapped_column(Text, nullable=True)
+    proof_hash:    Mapped[str | None] = mapped_column(String(64), nullable=True)
+    proof_tx_hash: Mapped[str | None] = mapped_column(String(66), nullable=True)
+
     strategy: Mapped[Strategy | None] = relationship("Strategy", back_populates="trades")
 
 
@@ -348,6 +353,27 @@ async def get_peak_portfolio_value() -> float:
         )
         total = result.scalar()
         return float(total) if total is not None else 0.0
+
+
+async def update_trade_proof(
+    trade_id: int,
+    *,
+    proof_string: str,
+    proof_hash: str,
+    proof_tx_hash: str | None = None,
+) -> None:
+    async with SessionLocal() as session:
+        await session.execute(
+            update(Trade)
+            .where(Trade.id == trade_id)
+            .values(
+                proof_string=proof_string,
+                proof_hash=proof_hash,
+                proof_tx_hash=proof_tx_hash,
+            )
+        )
+        await session.commit()
+        logger.debug("Trade id=%d proof stored (tx=%s)", trade_id, proof_tx_hash)
 
 
 async def fail_trade(trade_id: int, *, tx_hash: str | None = None) -> None:
