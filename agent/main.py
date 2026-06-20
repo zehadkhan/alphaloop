@@ -87,20 +87,20 @@ async def _register_erc8004() -> None:
     if config.ENVIRONMENT != "mainnet" or not config.COMPETITION_MODE:
         return
     try:
-        from bnbagent import ERC8004Agent, EVMWalletProvider, AgentEndpoint
+        from bnbagent import ERC8004Agent, EVMWalletProvider
         import os
-        password = os.getenv("WALLET_PASSWORD", "alphaloop-default-pw-change-me")
+        password   = os.getenv("WALLET_PASSWORD", "alphaloop-default-pw-change-me")
         private_key = os.getenv("AGENT_PRIVATE_KEY") or None
-        provider = EVMWalletProvider(password=password, private_key=private_key, persist=True)
-        agent = ERC8004Agent(provider, network="bsc-mainnet")
-        endpoint = AgentEndpoint(
-            name="AlphaLoop",
-            endpoint=os.getenv("AGENT_PUBLIC_URL", "https://alphaloop.local/erc8183"),
-            version="1.0.0",
-            capabilities=["trading", "strategy", "x402"],
-        )
-        logger.info("Registering agent on-chain (ERC-8004) …")
-        result = await agent.register_agent(endpoint)
+        provider   = EVMWalletProvider(password=password, private_key=private_key, persist=True)
+        agent      = ERC8004Agent(provider, network="bsc-mainnet")
+        agent_uri  = os.getenv("AGENT_PUBLIC_URL", "https://alphaloop.local/erc8183")
+        metadata   = [
+            {"name": "AlphaLoop"},
+            {"version": "1.0.0"},
+            {"capabilities": "trading,strategy,x402"},
+        ]
+        logger.info("Registering agent on-chain (ERC-8004)  uri=%s …", agent_uri)
+        result = await agent.register_agent(agent_uri, metadata)
         logger.info("ERC-8004 registration: %s", result)
     except Exception as exc:
         logger.warning("ERC-8004 registration skipped: %s", exc)
