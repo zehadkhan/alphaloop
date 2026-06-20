@@ -1,89 +1,180 @@
 # AlphaLoop
 
-> Autonomous AI trading agent for BNB/USDT on BSC — built for the **BNB HACK × CoinMarketCap × Trust Wallet $36,000 hackathon**.
+> Autonomous AI trading agent for BSC — built for the **BNB HACK × CoinMarketCap × Trust Wallet $36,000 hackathon**.
 
-AlphaLoop uses Claude AI to generate, backtest, and autonomously execute crypto trading strategies on BSC mainnet via PancakeSwap V2. Execution is handled by the Trust Wallet Agent Kit (TWAK) — the agent holds its own keys and signs every transaction locally.
+AlphaLoop uses Claude AI to generate, backtest, and autonomously execute crypto trading strategies on BSC mainnet via PancakeSwap V2 / TWAK. It is unique in using a **5-Axis Market Compass** and **on-chain decision proofs** to verify every trade decision before execution.
 
 **Hackathon:** [dorahacks.io/hackathon/bnbhack-twt-cmc](https://dorahacks.io/hackathon/bnbhack-twt-cmc)
 **Live trading window:** June 22–28, 2026 UTC
 
 ---
 
-## Wallet Addresses
+## Quick Start
 
-| Wallet | Address | Purpose |
-|--------|---------|---------|
-| **TWAK (active)** | `0x73Fb7fA92979dCc7E537Fe4159114f5F70727C7B` | Competition trading wallet — fund this one |
-| web3.py (fallback) | `0x9FF88b9333C161c8542Bd817C1FF422f89210866` | Used only if TWAK_REST_URL is not set |
+```bash
+# 1. Start TWAK (keep this terminal open)
+twak serve
 
-**Send BNB to: `0x73Fb7fA92979dCc7E537Fe4159114f5F70727C7B`**
-Network: BSC / BEP-20 (NOT BEP-2, NOT ERC-20)
-Minimum: 0.02 BNB (~$12) | Recommended: 0.05 BNB (~$30)
+# 2. Start agent + dashboard (new terminal)
+bash scripts/start_competition.sh
+
+# 3. Stop everything
+bash scripts/stop.sh
+```
+
+| Service | URL |
+|---|---|
+| Dashboard | http://localhost:3001 |
+| Agent API | http://localhost:8000 |
+| API Docs | http://localhost:8000/docs |
 
 ---
 
-## Competition Launch Checklist
+## Daily Commands
 
-### Before June 22 — required
+```bash
+# Live logs
+tail -f storage/uvicorn.log
 
-- [ ] Fund TWAK wallet with ≥ 0.02 BNB on BSC mainnet
-- [ ] Set `.env` for mainnet (see section below)
-- [ ] Start TWAK server: `twak serve --rest --port 7777`
-- [ ] Register on-chain: `twak compete register`
-- [ ] Verify registration on BscScan: `0x212c61b9b72c95d95bf29cf032f5e5635629aed5`
-- [ ] Submit project on DoraHacks (early draft is fine)
-- [ ] Start agent: `docker compose up -d`
+# Competition status
+curl http://localhost:8000/competition/status | python3 -m json.tool
 
-### June 22–28 — do not touch
+# Trigger a manual cycle right now
+curl -X POST http://localhost:8000/run
 
-- Keep `twak serve --rest --port 7777` running
-- Keep `docker compose up -d` running (`restart: unless-stopped` handles crashes)
-- Do NOT change `.env` or restart containers unless the agent is down
+# See what token scanner picked
+curl -X POST http://localhost:8000/competition/scan | python3 -m json.tool
+
+# Emergency close all positions
+curl -X POST http://localhost:8000/admin/close-all
+
+# Verify a trade's on-chain proof
+python scripts/verify_trade.py --trade-id N --check-chain
+```
+
+---
+
+## What the Agent Does Every 30 Minutes
+
+1. **Scans eligible tokens** — momentum scorer with hysteresis (avoids churn)
+2. **Computes 5-Axis Market Compass** — Trend / Momentum / Sentiment / Volatility / Stress (0–50 score)
+3. **Generates strategy via Claude** — compass state included in prompt, Claude knows the regime
+4. **Checks Edge Gate** — `confidence × (momentum/10) − 0.8% > 0` (skips low-value trades)
+5. **Runs backtest** — 45-day IS + 15-day OOS walk-forward, rejects if it fails
+6. **Executes swap via TWAK** — size scaled by compass regime × drawdown zone
+7. **Commits proof to BSC** — SHA-256 of compass state + decision stored as calldata
+
+---
+
+## Safety Zones (Drawdown Cascade)
+
+| Zone | Drawdown | Position Size | Extra Gate |
+|---|---|---|---|
+| GREEN | < 8% | 100% | — |
+| YELLOW | 8–15% | 70% | — |
+| ORANGE | 15–22% | 40% | Compass score ≥ 15 |
+| RED | 22–25% | 10% | Compass score ≥ 35 |
+| HALT | ≥ 25% | 0% | No new trades |
+
+Additional guards every cycle:
+- **Daily loss cap** — pause if loss > $50/day
+- **Stale position force-close** — close if open > 20h
+- **Smart compliance window** — soft hunt 18h UTC, alert 22h, force 23h
+- **Position guard** — max 1 open trade at a time
+
+---
+
+## Wallet Addresses
+
+| Wallet | Address | Purpose |
+|---|---|---|
+| **TWAK (active)** | `0x73Fb7fA92979dCc7E537Fe4159114f5F70727C7B` | Competition trading wallet — fund this |
+| web3.py (fallback) | `0x9FF88b9333C161c8542Bd817C1FF422f89210866` | Used only if TWAK not configured |
+
+**Send BNB to: `0x73Fb7fA92979dCc7E537Fe4159114f5F70727C7B`**
+Network: BSC / BEP-20. Minimum: 0.02 BNB. Recommended: 0.05 BNB.
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                       AlphaLoop Agent                           │
-│                                                                 │
-│  APScheduler (every 30 min)                                     │
-│       │                                                         │
-│       ▼                                                         │
-│  TokenScanner ──▶ ranks 30 competition-eligible BEP-20 tokens   │
-│       │           (ETH, CAKE, LINK, DOGE, SHIB, FET, INJ …)    │
-│       ▼                                                         │
-│  CMC Client ──▶ quote + OHLCV (daily + 4h)                      │
-│       │         ├─ standard Pro API (CMC_API_KEY)               │
-│       │         └─ Agent Hub MCP + x402 via TWAK (when set)     │
-│       ▼                                                         │
-│  Indicators ──▶ RSI, MACD, Bollinger Bands, SMA 20/50           │
-│       │                                                         │
-│       ▼                                                         │
-│  Claude AI ──▶ BUY / SELL / HOLD + confidence + reasoning       │
-│       │                                                         │
-│       ├─▶ HOLD or confidence < 0.6 → skip                       │
-│       │                                                         │
-│       ▼                                                         │
-│  Backtester ──▶ 45-day IS + 15-day OOS walk-forward             │
-│       │                                                         │
-│       ├─▶ fail → skip                                           │
-│       │                                                         │
-│       ▼                                                         │
-│  TWAKExecutor ──▶ POST /actions/swap → BSC mainnet              │
-│  (fallback: PancakeSwap V2 via web3.py)                         │
-│       │                                                         │
-│       ▼                                                         │
-│  SQLite ──▶ trade + strategy + run saved                        │
-│                                                                 │
-│  Competition guards (every cycle):                              │
-│    - Drawdown check: halt if ≥ 25%                              │
-│    - Stale position force-close: close if open > 20h            │
-│    - Daily trade guarantee: force BUY at 22:00 UTC if 0 trades  │
-│    - Position guard: max 1 open trade at a time                 │
-│    - Daily loss limit: pause if loss > $50/day                  │
-└─────────────────────────────────────────────────────────────────┘
+APScheduler (every 30 min)
+       │
+       ▼
+TokenScanner ──▶ hysteresis-ranked BEP-20 tokens (30 eligible)
+       │
+       ▼
+CMC Client ──▶ quote + OHLCV + global metrics (btc_dominance, F&G)
+       │
+       ▼
+Indicators ──▶ RSI, MACD, BB, SMA20/50, EMA9/21, ATR
+       │
+       ▼
+5-Axis Market Compass ──▶ Trend / Momentum / Sentiment / Volatility / Stress
+       │                   score 0–50 → regime profile → position sizing
+       ▼
+Claude AI ──▶ BUY / SELL / HOLD + confidence + entry/SL/TP + reasoning
+       │       (receives full compass state in prompt)
+       │
+       ├── HOLD or confidence < threshold → skip
+       ├── Edge gate: conf × momentum − cost ≤ 0 → skip
+       │
+       ▼
+Backtester ──▶ walk-forward IS/OOS → fail → skip
+       │
+       ▼
+Build Proof ──▶ sha256(compass_state + decision) = proof_hash
+       │
+       ▼
+TWAKExecutor ──▶ POST /actions/swap → BSC mainnet
+(fallback: PancakeSwap V2 via web3.py)
+       │
+       ▼
+Commit Proof ──▶ self-transfer BNB tx with proof_hash as calldata
+       │
+       ▼
+SQLite ──▶ trade + strategy + proof_string + proof_hash + run saved
+```
+
+---
+
+## 5-Axis Market Compass
+
+AlphaLoop's unique regime detection engine. Each axis scored 0–10 independently:
+
+| Axis | Inputs | Source |
+|---|---|---|
+| Trend | EMA9/21 cross + price vs SMA20/50 | Binance OHLCV |
+| Momentum | RSI + MACD histogram + 24h change | Binance OHLCV + CMC |
+| Sentiment | Fear & Greed index + BTC dominance level | alternative.me + CMC |
+| Volatility | ATR percentile + BB-width percentile (moderate = best) | Binance OHLCV |
+| Stress | Perp funding rate z-score + price stretch from SMA50 (inverted) | Binance FAPI |
+
+**Compass Score = sum of 5 axes (0–50)**
+
+| Score | Regime | Position Size |
+|---|---|---|
+| 35–50 | MOMENTUM_RIDE | 100% |
+| 25–35 | TREND_CONFIRM | 85% |
+| 15–25 | NEUTRAL_CAUTIOUS | 60% |
+| 8–15 | DEFENSIVE | 30% |
+| < 8 | RISK_OFF | Skip |
+
+---
+
+## On-Chain Decision Proof
+
+Every executed trade produces a verifiable proof:
+
+```
+ALPHALOOP_PROOF_v1|{timestamp}|{symbol}|{compass_score}|{axes}|{confidence}|{action}|{entry_price}
+```
+
+SHA-256 of this string is committed to BSC as calldata in a self-transfer BNB tx — before the trade executes. Anyone can verify:
+
+```bash
+python scripts/verify_trade.py --trade-id 42 --check-chain
 ```
 
 ---
@@ -91,79 +182,41 @@ Minimum: 0.02 BNB (~$12) | Recommended: 0.05 BNB (~$30)
 ## Stack
 
 | Layer | Library | Purpose |
-|-------|---------|---------|
+|---|---|---|
 | API server | FastAPI + uvicorn | REST endpoints, lifespan hooks |
-| Scheduler | APScheduler | 30-min agent cycle + 2-min trade monitor |
-| Market data | httpx + CMC API | Quotes and OHLCV candles |
-| Token scanner | Binance public API | RSI + momentum score across 30 tokens |
-| Strategy | Anthropic Claude | LLM reasoning over indicators |
-| Indicators | pandas + numpy | RSI, MACD, Bollinger Bands, SMA |
-| Backtesting | Pure Python | Walk-forward IS/OOS simulation |
+| Scheduler | APScheduler | 30-min cycle + 2-min trade monitor |
+| Regime engine | custom (data/regime.py) | 5-axis compass, F&G, perp funding |
+| Market data | httpx + CMC API | Quotes, OHLCV, global metrics |
+| Token scanner | Binance public API | Hysteresis-aware momentum ranking |
+| Strategy | Anthropic Claude (sonnet-4-5) | LLM reasoning with compass context |
+| Indicators | pandas + numpy | RSI, MACD, BB, SMA, EMA, ATR |
+| Backtesting | Pure Python | Walk-forward IS/OOS |
 | Execution | TWAK REST API | Self-custody swap via Trust Wallet Agent Kit |
-| Fallback | web3.py + PancakeSwap V2 | Used if TWAK_REST_URL not set |
-| Database | SQLAlchemy + aiosqlite | Async SQLite ORM |
-| Dashboard | Next.js | Live chart, equity curve, competition panel |
-
----
-
-## Quick Start (local)
-
-```bash
-git clone <repo>
-cd alphaloop
-
-cp .env.example .env
-# fill in your keys
-
-pip install -r requirements.txt
-
-# Install TWAK
-curl -fsSL https://agent-kit.trustwallet.com/install.sh | bash
-twak setup
-twak wallet create --name alphaloop
-twak serve --rest --port 7777   # keep this running
-
-# Start the agent
-uvicorn agent.main:app --reload
-
-# Manually trigger one cycle
-curl -X POST http://localhost:8000/run
-```
-
----
-
-## Docker (competition deployment)
-
-```bash
-# Start TWAK on the HOST first (not inside Docker)
-twak serve --rest --port 7777
-
-# Then launch the agent + dashboard
-./scripts/start_competition.sh
-# or manually:
-docker compose up -d --build
-```
-
-TWAK runs on the host. The container reaches it via `host.docker.internal:7777`.
-`restart: unless-stopped` ensures the agent auto-recovers from crashes during the 6-day window.
+| Fallback | web3.py + PancakeSwap V2 | If TWAK not available |
+| Database | SQLAlchemy 2.0 + aiosqlite | Async SQLite ORM + proof columns |
+| Dashboard | Next.js 14 | Live chart, compass bar, zone badge, equity curve |
 
 ---
 
 ## API Endpoints
 
 | Method | Path | Description |
-|--------|------|-------------|
+|---|---|---|
 | GET | `/health` | Liveness check + live BNB price |
-| GET | `/status` | Last run, open positions, signing backend |
-| GET | `/trades` | Executed trades (newest first) |
+| GET | `/status` | Last run, compass, open positions |
+| GET | `/trades` | Executed trades |
 | GET | `/strategies` | Generated strategies |
 | GET | `/runs` | Agent run history |
-| POST | `/run` | Manually trigger one cycle |
+| GET | `/activity` | Plain-English cycle summaries |
+| POST | `/run` | Trigger one cycle manually |
 | POST | `/monitor` | Check TP/SL on open positions |
-| GET | `/competition/status` | Drawdown, daily trades, stale positions |
-| POST | `/competition/register` | Trigger on-chain competition registration |
-| GET | `/competition/scan` | Token scanner results right now |
-| GET | `/twak/status` | TWAK wallet address, balance, registration |
+| GET | `/competition/status` | Drawdown zone, daily trades, stale positions |
+| POST | `/competition/register` | On-chain competition registration |
+| POST | `/competition/scan` | Token scanner results right now |
+| GET | `/twak/status` | TWAK wallet, balance, registration |
+| GET | `/admin/config` | Runtime config |
+| POST | `/admin/config` | Update config (paused, position size, etc.) |
+| POST | `/admin/close-all` | Emergency close all positions |
 
 ---
 
@@ -171,89 +224,84 @@ TWAK runs on the host. The container reaches it via `host.docker.internal:7777`.
 
 ```
 alphaloop/
-├── Dockerfile
-├── docker-compose.yml
-├── requirements.txt
-├── .env.example
-├── scripts/
-│   ├── start_competition.sh   — launch script for June 22
-│   ├── reset_db.sh            — wipe DB for clean start
-│   ├── check_ready.py         — pre-competition readiness checker
-│   └── test_mainnet_swaps.py  — verify PancakeSwap V2 paths for top 8 tokens
-│
 ├── agent/
-│   ├── config.py              — typed env-var config singleton
+│   ├── config.py              — env-var config singleton
 │   ├── main.py                — FastAPI app + all endpoints
 │   ├── scheduler.py           — run_agent_cycle() + APScheduler
-│   └── competition.py         — drawdown, stale close, daily guarantee
+│   ├── competition.py         — drawdown cascade, stale close, compliance window
+│   └── proof.py               — on-chain decision proof builder
 │
 ├── data/
-│   ├── cmc_client.py          — async CoinMarketCap client (+ Agent Hub)
-│   ├── indicators.py          — RSI, MACD, Bollinger Bands, SMA, ATR
-│   └── token_scanner.py       — ranks 30 tokens by momentum score
+│   ├── cmc_client.py          — async CMC client (Pro API + Agent Hub + x402)
+│   ├── indicators.py          — RSI, MACD, BB, SMA, EMA, ATR
+│   ├── token_scanner.py       — hysteresis-aware momentum token ranking
+│   └── regime.py              — 5-Axis Market Compass engine
 │
 ├── strategy/
-│   ├── generator.py           — Claude strategy generation (structured JSON)
+│   ├── generator.py           — Claude strategy generation with compass context
 │   └── backtester.py          — walk-forward IS/OOS backtester
 │
 ├── execution/
 │   ├── twak_executor.py       — TWAK REST swap executor (primary)
-│   ├── wallet.py              — WalletAgent via web3.py (fallback)
 │   ├── pancakeswap.py         — PancakeSwap V2 (fallback)
-│   ├── twak_client.py         — TWAK CLI wrapper (registration)
-│   └── bnb_wallet.py          — BNB Agent SDK EVMWalletProvider + x402
+│   ├── bnb_wallet.py          — BNB Agent SDK EVMWalletProvider + x402
+│   └── wallet.py              — WalletAgent via web3.py
 │
 ├── db/
-│   └── models.py              — SQLAlchemy async ORM + CRUD helpers
+│   └── models.py              — SQLAlchemy ORM + proof columns on Trade
 │
 ├── dashboard/                 — Next.js dashboard
+│   └── components/
+│       └── CompetitionPanel.tsx — zone badge + compass bar
 │
-└── tests/
-    └── test_pipeline.py       — 20 smoke tests (no transactions)
+├── scripts/
+│   ├── start_competition.sh   — one-command launch (terminal or --docker)
+│   ├── stop.sh                — stop all processes
+│   ├── reset_db.sh            — wipe DB for clean start
+│   ├── verify_trade.py        — verify on-chain proof for any trade
+│   └── check_ready.py         — pre-competition readiness checker
+│
+└── ref-projects/              — competitor repos for research (git-ignored)
+    └── REPO_LIST.md
 ```
 
 ---
 
-## DoraHacks Submission Summary
+## Docker (optional)
 
-> Use this text in the DoraHacks project description.
+Terminal mode is the default. Use Docker only for VPS/server deployment:
 
-**What it does**
+```bash
+# Start TWAK on host first
+twak serve
 
-AlphaLoop is a fully autonomous AI trading agent for BSC. Every 30 minutes it:
-1. Scans 30 eligible tokens via a momentum scorer (RSI + 24h change + volume)
-2. Fetches market data from CoinMarketCap and technical indicators via Binance OHLCV
-3. Asks Claude AI (claude-sonnet-4-5) to generate a BUY / SELL / HOLD strategy with entry, stop-loss, and take-profit levels plus reasoning
-4. Walk-forward backtests the strategy (45-day in-sample + 15-day out-of-sample) and rejects it if it fails
-5. Executes the approved swap via the Trust Wallet Agent Kit (TWAK) REST API — self-custody, no CEX
-6. Monitors open positions every 2 minutes for TP/SL hits and force-closes stale trades
+# Docker mode
+bash scripts/start_competition.sh --docker
+# or:
+docker compose up -d --build
+```
 
-**Why AlphaLoop beats manual trading**
+---
 
-- Removes emotion and FOMO — Claude AI decides with data, not fear or greed
-- 24/7 autonomous — runs during Asia hours when most retail traders are asleep
-- Built-in risk management: 25% drawdown circuit breaker, daily loss cap, confidence-based position sizing
-- Self-custody: private keys never leave the TWAK wallet — no exchange counterparty risk
+## Environment Variables
 
-**Trust Wallet Agent Kit (TWAK) integration**
-
-- All swaps go through `TWAKExecutor` → TWAK REST `POST /actions/swap`
-- On-chain registration via `twak compete register` on the competition contract
-- x402 micropayment support: CMC Agent Hub data requests are routed through `TWAKExecutor.x402_request()` — TWAK signs the micropayment natively, making TWAK the single execution layer for both data and trades
-- TWAK autonomous mode allowlist restricts execution to 30 competition-eligible BEP-20 tokens only (BNB excluded per competition rules)
-
-**CoinMarketCap Agent Hub integration**
-
-- `CMCClient` dynamically switches between the standard Pro API and the Agent Hub MCP endpoint (set `CMC_AGENT_HUB_URL`)
-- When `TWAK_REST_URL + X402_ENABLED + CMC_AGENT_HUB_URL` are all configured, every CMC data request is routed through TWAK's native `x402_request` — no separate signing needed
-- Falls back to direct HTTP with `X-Payment` header if TWAK is not available
-- Supports `get_quote` and `get_market_metrics` via the Agent Hub MCP path
-
-**BNB AI Agent SDK integration**
-
-- `BNBWallet` wraps `EVMWalletProvider` — AES-256 encrypted local keystore, keys never in env vars at runtime
-- `X402Signer` for EIP-712 typed-data micropayment signing
-- `ERC8004Agent.register_agent(endpoint)` called on startup in mainnet + competition mode
+| Variable | Default | Description |
+|---|---|---|
+| `ENVIRONMENT` | `testnet` | Set to `mainnet` for competition |
+| `DRY_RUN` | `true` | Set to `false` for live trades |
+| `COMPETITION_MODE` | `false` | Set to `true` to enable all guardrails |
+| `CMC_API_KEY` | — | CoinMarketCap Pro API key |
+| `ANTHROPIC_API_KEY` | — | Anthropic Claude API key |
+| `AGENT_PRIVATE_KEY` | — | BSC wallet private key |
+| `AGENT_WALLET_ADDRESS` | — | BSC wallet address |
+| `BSC_RPC_URL` | testnet RPC | Use `https://bsc-dataseed.binance.org/` for mainnet |
+| `TWAK_REST_URL` | — | TWAK server URL e.g. `http://localhost:1337` |
+| `TWAK_WALLET_NAME` | `alphaloop` | TWAK wallet name |
+| `MAX_POSITION_SIZE_USD` | `10` | Max USD per trade |
+| `INITIAL_PORTFOLIO_USD` | `1000` | Starting portfolio (for drawdown calc) |
+| `DATABASE_URL` | `sqlite+aiosqlite:///./storage/alphaloop.db` | DB path |
+| `HYSTERESIS_MARGIN` | `0.15` | Token scanner displacement threshold |
+| `ROUND_TRIP_COST_PCT` | `0.008` | Edge gate cost estimate (0.8%) |
 
 ---
 
@@ -262,5 +310,6 @@ AlphaLoop is a fully autonomous AI trading agent for BSC. Every 30 minutes it:
 - `DRY_RUN=true` by default — no real transactions until explicitly disabled
 - `MAX_POSITION_SIZE_USD=10` caps every trade
 - 25% drawdown circuit breaker halts all trading automatically
-- Private key is loaded from `.env` only — never logged or stored in DB
+- Private key loaded from `.env` only — never logged or stored in DB
 - `.env` is in `.gitignore` — never commit it
+- `ref-projects/` is in `.gitignore` — competitor code never committed
