@@ -17,8 +17,9 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-# BSC chain identifiers for TWAK
-_CHAIN = "bsc-testnet" if os.getenv("ENVIRONMENT", "testnet") == "testnet" else "bsc"
+def _get_chain() -> str:
+    """Return the TWAK chain identifier — read at call time so Docker env vars are loaded."""
+    return "bsc" if os.getenv("ENVIRONMENT", "testnet") == "mainnet" else "bsc-testnet"
 
 
 def _load_credentials() -> tuple[str, str]:
@@ -78,9 +79,9 @@ class TWAKExecutor:
     async def init_address(self) -> str:
         """Fetch the TWAK wallet BSC address."""
         try:
-            data = await self._call("get_address", {"chain": _CHAIN})
+            data = await self._call("get_address", {"chain": _get_chain()})
             self._address = data.get("address", "")
-            logger.info("TWAK wallet address on %s: %s", _CHAIN, self._address)
+            logger.info("TWAK wallet address on %s: %s", _get_chain(), self._address)
         except Exception as exc:
             logger.warning("Could not fetch TWAK address: %s", exc)
         return self._address
@@ -88,9 +89,9 @@ class TWAKExecutor:
     async def get_price(self, token_in: str, token_out: str) -> float:
         """Return current price of token_in in token_out units via get_swap_quote."""
         data = await self._call("get_swap_quote", {
-            "fromChain": _CHAIN,
+            "fromChain": _get_chain(),
             "fromToken": token_in.upper(),
-            "toChain":   _CHAIN,
+            "toChain":   _get_chain(),
             "toToken":   token_out.upper(),
             "amount":    "1",
         })
@@ -123,7 +124,7 @@ class TWAKExecutor:
 
         logger.info(
             "TWAK swap: %s %s → %s  dry_run=%s  chain=%s",
-            amount_str, token_in, token_out, self.dry_run, _CHAIN,
+            amount_str, token_in, token_out, self.dry_run, _get_chain(),
         )
 
         if self.dry_run:
@@ -140,9 +141,9 @@ class TWAKExecutor:
             }
 
         data = await self._call("swap", {
-            "fromChain": _CHAIN,
+            "fromChain": _get_chain(),
             "fromToken": token_in,
-            "toChain":   _CHAIN,
+            "toChain":   _get_chain(),
             "toToken":   token_out,
             "amount":    amount_str,
         })
