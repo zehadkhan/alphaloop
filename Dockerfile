@@ -2,9 +2,10 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install system CA certs + curl for health checks
+# Install system deps: CA certs + curl (healthcheck) + build tools (web3/greenlet need gcc)
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && apt-get install -y --no-install-recommends \
+        curl ca-certificates gcc g++ libffi-dev \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
