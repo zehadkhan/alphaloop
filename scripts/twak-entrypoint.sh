@@ -1,5 +1,5 @@
 #!/bin/sh
-# TWAK Docker entrypoint — creates wallet if needed, then starts REST server.
+# TWAK Docker entrypoint — initialises wallet on first boot, then serves.
 #
 # Required env vars (set in Coolify UI):
 #   TWAK_ACCESS_ID    — from ~/.config/twak/config.json on your local machine
@@ -15,17 +15,11 @@ if [ -z "$TWAK_ACCESS_ID" ] || [ -z "$TWAK_HMAC_SECRET" ]; then
   exit 1
 fi
 
-echo "[TWAK] Starting... wallet=${WALLET_NAME}"
+echo "[TWAK] Credentials OK. Checking wallet..."
 
-# Create wallet if it doesn't exist yet in the persistent volume.
-# 'twak wallet create' generates a fresh key and saves it to ~/.config/twak/
-# The local wallet is then auto-bound when the REST server starts.
-if ! twak wallet status --name "$WALLET_NAME" > /dev/null 2>&1; then
-  echo "[TWAK] No wallet found — creating local agent wallet '${WALLET_NAME}'..."
-  twak wallet create --name "$WALLET_NAME" && echo "[TWAK] Wallet created."
-else
-  echo "[TWAK] Wallet '${WALLET_NAME}' already exists — skipping create."
-fi
+# twak init creates the local agent wallet if it doesn't exist yet.
+# The wallet is persisted in the twak-data volume across restarts.
+twak init --name "$WALLET_NAME" 2>/dev/null && echo "[TWAK] Wallet ready." || echo "[TWAK] twak init skipped (already exists or non-interactive)."
 
 echo "[TWAK] Starting REST server on 0.0.0.0:3000..."
 exec twak serve --rest --host 0.0.0.0 --port 3000
