@@ -11,7 +11,7 @@ services:
       - 'AGENT_PRIVATE_KEY=${AGENT_PRIVATE_KEY}'
       - 'TWAK_WALLET_NAME=${TWAK_WALLET_NAME:-alphaloop}'
     volumes:
-      - 'twak-data:/root/.config/twak'
+      - 'twak-data:/root/.twak'
     expose:
       - '3000'
     restart: unless-stopped
