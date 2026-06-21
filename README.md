@@ -4,7 +4,6 @@
 
 [![Hackathon](https://img.shields.io/badge/BNB%20Hack-2026-F0B90B?style=flat&logo=binance)](https://dorahacks.io/hackathon/bnbhack-twt-cmc)
 [![Network](https://img.shields.io/badge/Network-BSC%20Mainnet-F0B90B?style=flat&logo=binance)](https://bscscan.com)
-[![Claude AI](https://img.shields.io/badge/Strategy-Claude%20AI-6B4FBB?style=flat)](https://anthropic.com)
 [![TWAK](https://img.shields.io/badge/Execution-Trust%20Wallet%20Agent%20Kit-0500FF?style=flat)](https://trustwallet.com)
 [![Live](https://img.shields.io/badge/Status-Live%20Jun%2022--28-brightgreen?style=flat)]()
 
