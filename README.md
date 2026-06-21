@@ -4,8 +4,22 @@
 
 AlphaLoop uses Claude AI to generate, backtest, and autonomously execute crypto trading strategies on BSC mainnet via PancakeSwap V2 / TWAK. It is unique in using a **5-Axis Market Compass** and **on-chain decision proofs** to verify every trade decision before execution.
 
-**Hackathon:** [dorahacks.io/hackathon/bnbhack-twt-cmc](https://dorahacks.io/hackathon/bnbhack-twt-cmc)
+**Hackathon:** [dorahacks.io/hackathon/bnbhack-twt-cmc](https://dorahacks.io/hackathon/bnbhack-twt-cmc)  
 **Live trading window:** June 22–28, 2026 UTC
+
+---
+
+![AlphaLoop Dashboard](docs/dashboard.png)
+
+---
+
+## Live Deployment
+
+| Service | URL |
+|---|---|
+| Dashboard | http://p9afyi7epwshbwbqgon9qa2f.75.119.139.99.sslip.io |
+| Agent API | http://qp38fy65jtmff7agx1e4ufr0.75.119.139.99.sslip.io |
+| API Docs | http://qp38fy65jtmff7agx1e4ufr0.75.119.139.99.sslip.io/docs |
 
 ---
 
@@ -88,11 +102,8 @@ Additional guards every cycle:
 
 | Wallet | Address | Purpose |
 |---|---|---|
-| **TWAK (active)** | `0x73Fb7fA92979dCc7E537Fe4159114f5F70727C7B` | Competition trading wallet — fund this |
+| **TWAK (active)** | `0xa401A91faa968Ee4334780712C95Af208E570e0F` | Competition trading wallet |
 | web3.py (fallback) | `0x9FF88b9333C161c8542Bd817C1FF422f89210866` | Used only if TWAK not configured |
-
-**Send BNB to: `0x73Fb7fA92979dCc7E537Fe4159114f5F70727C7B`**
-Network: BSC / BEP-20. Minimum: 0.02 BNB. Recommended: 0.05 BNB.
 
 ---
 
@@ -102,7 +113,7 @@ Network: BSC / BEP-20. Minimum: 0.02 BNB. Recommended: 0.05 BNB.
 APScheduler (every 30 min)
        │
        ▼
-TokenScanner ──▶ hysteresis-ranked BEP-20 tokens (30 eligible)
+TokenScanner ──▶ hysteresis-ranked BEP-20 tokens (149 eligible)
        │
        ▼
 CMC Client ──▶ quote + OHLCV + global metrics (btc_dominance, F&G)
@@ -188,7 +199,7 @@ python scripts/verify_trade.py --trade-id 42 --check-chain
 | Regime engine | custom (data/regime.py) | 5-axis compass, F&G, perp funding |
 | Market data | httpx + CMC API | Quotes, OHLCV, global metrics |
 | Token scanner | Binance public API | Hysteresis-aware momentum ranking |
-| Strategy | Anthropic Claude (sonnet-4-5) | LLM reasoning with compass context |
+| Strategy | Anthropic Claude (claude-sonnet-4-6) | LLM reasoning with compass context |
 | Indicators | pandas + numpy | RSI, MACD, BB, SMA, EMA, ATR |
 | Backtesting | Pure Python | Walk-forward IS/OOS |
 | Execution | TWAK REST API | Self-custody swap via Trust Wallet Agent Kit |
@@ -261,8 +272,8 @@ alphaloop/
 │   ├── verify_trade.py        — verify on-chain proof for any trade
 │   └── check_ready.py         — pre-competition readiness checker
 │
-└── ref-projects/              — competitor repos for research (git-ignored)
-    └── REPO_LIST.md
+└── docs/
+    └── dashboard.png          — live dashboard screenshot
 ```
 
 ---
@@ -297,6 +308,7 @@ docker compose up -d --build
 | `BSC_RPC_URL` | testnet RPC | Use `https://bsc-dataseed.binance.org/` for mainnet |
 | `TWAK_REST_URL` | — | TWAK server URL e.g. `http://localhost:1337` |
 | `TWAK_WALLET_NAME` | `alphaloop` | TWAK wallet name |
+| `TWAK_WALLET_PASSWORD` | — | TWAK wallet unlock password |
 | `MAX_POSITION_SIZE_USD` | `10` | Max USD per trade |
 | `INITIAL_PORTFOLIO_USD` | `1000` | Starting portfolio (for drawdown calc) |
 | `DATABASE_URL` | `sqlite+aiosqlite:///./storage/alphaloop.db` | DB path |
