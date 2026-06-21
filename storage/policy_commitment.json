@@ -1,0 +1,52 @@
+{
+  "policy_hash": "0x90d0fea6aaf447d745d37b044c167149d7654c2594c302ad404da36a9a4c5ca7",
+  "signed_at": "2026-06-21T13:51:46.369060+00:00",
+  "signer": "0x9FF88b9333C161c8542Bd817C1FF422f89210866",
+  "signature": "0x610d60f3b301c193580ee322df7d43b9fe58c5a5892a85889ce5286e48282c821f94aebe0293c53a563f65c5b74bce721bc896fac0856ee569911258e3c0c71d1c",
+  "message": "AlphaLoop Risk Policy Commitment\n0x90d0fea6aaf447d745d37b044c167149d7654c2594c302ad404da36a9a4c5ca7",
+  "policy": {
+    "agent": "AlphaLoop",
+    "version": "1.0",
+    "competition": "BNB Hack 2026",
+    "window": "2026-06-22T00:00:00Z / 2026-06-28T23:59:59Z",
+    "committed_at": "2026-06-21T13:51:46.369060+00:00",
+    "rules": {
+      "max_position_usd": 10.0,
+      "max_drawdown_pct": 25.0,
+      "dq_threshold_pct": 30.0,
+      "daily_loss_cap_usd": 50.0,
+      "max_position_hold_hours": 20.0,
+      "min_confidence": 0.55,
+      "edge_gate": "confidence * (momentum/10) - round_trip_cost > 0",
+      "round_trip_cost_pct": 0.008,
+      "drawdown_zones": {
+        "GREEN": {
+          "max_pct": 8,
+          "size_mult": 1.0
+        },
+        "YELLOW": {
+          "max_pct": 15,
+          "size_mult": 0.7
+        },
+        "ORANGE": {
+          "max_pct": 22,
+          "size_mult": 0.4,
+          "min_compass": 15
+        },
+        "RED": {
+          "max_pct": 25,
+          "size_mult": 0.1,
+          "min_compass": 35
+        },
+        "HALT": {
+          "min_pct": 25,
+          "size_mult": 0.0
+        }
+      },
+      "strategy": "5-Axis Market Compass (Trend/Momentum/Sentiment/Volatility/Stress) + Claude AI + Walk-forward backtest gate",
+      "execution": "TWAK (Trust Wallet Agent Kit) \u2014 self-custody, BSC mainnet",
+      "eligible_tokens": 149,
+      "compliance_window": "soft 18h UTC, alert 22h UTC, hard 23h UTC force-trade"
+    }
+  }
+}
