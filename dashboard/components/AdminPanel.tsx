@@ -56,7 +56,6 @@ export default function AdminPanel({ config, onUpdate }: Props) {
           position_size_usd: posSize,
           min_confidence: minConf / 100,
           claude_instruction: instruction || null,
-          eligible_tokens: tokens,
           monitor_interval_minutes: monitorInterval,
         }),
       });
@@ -289,26 +288,11 @@ export default function AdminPanel({ config, onUpdate }: Props) {
 
               {/* Token Selection */}
               <section>
-                <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-2 flex items-center gap-1.5">
                   <Zap size={12} /> Active Tokens
                 </h3>
-                <div className="flex flex-wrap gap-2">
-                  {ALL_TOKENS.map((t) => (
-                    <button
-                      key={t}
-                      onClick={() => toggleToken(t)}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
-                        tokens.includes(t)
-                          ? "bg-accent/20 text-accent border border-accent/30"
-                          : "bg-surface-2 text-text-muted border border-border-subtle hover:border-accent/30"
-                      }`}
-                    >
-                      {t}
-                    </button>
-                  ))}
-                </div>
-                <p className="mt-2 text-xs text-text-muted">
-                  {tokens.length} token{tokens.length !== 1 ? "s" : ""} selected
+                <p className="text-xs text-text-muted">
+                  149 tokens configured in backend — managed via config, not overridable here.
                 </p>
               </section>
 
