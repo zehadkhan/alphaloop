@@ -77,7 +77,17 @@ class TWAKExecutor:
         return data
 
     async def init_address(self) -> str:
-        """Fetch the TWAK wallet BSC address."""
+        """Fetch the TWAK wallet BSC address.
+
+        Calls switch_wallet_mode(local) first so TWAK uses the local agent
+        wallet even if the wallet wasn't auto-bound on server startup.
+        """
+        try:
+            await self._call("switch_wallet_mode", {"mode": "local"})
+            logger.info("TWAK wallet mode set to local")
+        except Exception as exc:
+            logger.debug("switch_wallet_mode skipped (already set or not needed): %s", exc)
+
         try:
             data = await self._call("get_address", {"chain": _get_chain()})
             self._address = data.get("address", "")
