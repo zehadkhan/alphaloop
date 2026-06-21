@@ -66,7 +66,10 @@ The full AlphaLoop agent loads an approved Strategy Skill, connects to TWAK for 
 - **Risk-gated deployment** — no strategy goes live without passing backtest thresholds. Capital is protected by design.
 - **5-Axis Market Compass** — unique regime detection engine scoring Trend / Momentum / Sentiment / Volatility / Stress (0–50) to adapt position sizing to market conditions.
 - **On-chain decision proofs** — SHA-256 of every trade decision committed to BSC as calldata before execution. Fully verifiable.
-- **Fully composable** — the Strategy Skill is a reusable artifact any other CMC agent can consume from the marketplace.
+- **Signed risk policy** — EIP-191 signature of all trading rules committed before competition window. Proves rules were set in advance, not retroactively. See: storage/policy_commitment.json
+- **x402 micropayments** — CMC Agent Hub data routed through TWAK's native x402 payment layer for verifiable, pay-per-request data access.
+- **Abstention ledger** — every HOLD and low-confidence skip recorded in DB with full Claude reasoning. Non-trades are first-class decisions.
+- **Equity-reliability guard** — cycle automatically skipped if price/volume/candle data is unreliable. Never trades on bad data.
 - **Self-custody** — keys never leave the user's device. TWAK signs locally; the agent never holds funds.
 
 ---
@@ -80,6 +83,10 @@ The full AlphaLoop agent loads an approved Strategy Skill, connects to TWAK for 
 - TWAK autonomous signing ✅
 - Competition registration (on-chain) ✅
 - Live trading agent deployed on VPS ✅
+- EIP-191 signed risk policy (pre-competition) ✅
+- x402 CMC micropayment integration ✅
+- Abstention ledger (HOLD decisions recorded) ✅
+- Equity-reliability guard ✅
 - BNB AI Agent SDK execution 🔄 In progress
 - PnL feedback loop 🔄 In progress
 
