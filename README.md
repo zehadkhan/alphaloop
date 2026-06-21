@@ -5,6 +5,8 @@
 [![Hackathon](https://img.shields.io/badge/BNB%20Hack-2026-F0B90B?style=flat&logo=binance)](https://dorahacks.io/hackathon/bnbhack-twt-cmc)
 [![Network](https://img.shields.io/badge/Network-BSC%20Mainnet-F0B90B?style=flat&logo=binance)](https://bscscan.com)
 [![TWAK](https://img.shields.io/badge/Execution-Trust%20Wallet%20Agent%20Kit-0500FF?style=flat)](https://trustwallet.com)
+[![x402](https://img.shields.io/badge/Payments-x402%20Enabled-9B59B6?style=flat)]()
+[![Policy](https://img.shields.io/badge/Risk%20Policy-EIP--191%20Signed-27AE60?style=flat)](storage/policy_commitment.json)
 [![Live](https://img.shields.io/badge/Status-Live%20Jun%2022--28-brightgreen?style=flat)]()
 
 AlphaLoop uses Claude AI to generate, backtest, and autonomously execute crypto trading strategies on BSC mainnet via TWAK (Trust Wallet Agent Kit). Every trade is governed by a **5-Axis Market Compass** and committed on-chain as a verifiable proof before execution.
@@ -25,7 +27,18 @@ AlphaLoop uses Claude AI to generate, backtest, and autonomously execute crypto 
 
 **Competition wallet:** `0xa401A91faa968Ee4334780712C95Af208E570e0F`  
 **Trading window:** June 22–28, 2026 UTC  
-**Registration TX:** `0x2f11419f8aea72604975a5e0101f2a79fd6d0ac42fd427a03cba887e07e53b0b`
+**Registration TX:** `0x2f11419f8aea72604975a5e0101f2a79fd6d0ac42fd427a03cba887e07e53b0b`  
+**Risk Policy Hash:** `0x90d0fea6aaf447d745d37b044c167149d7654c2594c302ad404da36a9a4c5ca7` — [EIP-191 signed before competition window](storage/policy_commitment.json)
+
+---
+
+## Verifiability Features
+
+- **Signed risk policy** — EIP-191 signature of all trading rules committed before the competition window opens. Anyone can verify the agent never broke its own pre-committed rules. See [`storage/policy_commitment.json`](storage/policy_commitment.json).
+- **x402 micropayments** — CMC Agent Hub data requests routed through TWAK's native x402 payment layer. TWAK signs every data payment — no manual key management.
+- **Abstention ledger** — Every HOLD and low-confidence skip is saved to the database with full Claude reasoning. Non-trades are first-class recorded decisions.
+- **On-chain decision proofs** — SHA-256 of every trade decision committed to BSC as calldata before the swap executes.
+- **Equity-reliability guard** — Cycle skipped automatically if price/volume/candle data is unreliable. Never trades on stale or bad data.
 
 ---
 
