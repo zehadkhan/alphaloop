@@ -141,7 +141,11 @@ async def run_agent_cycle() -> dict:
         return {"status": "skipped", "reason": "cycle_already_running"}
 
     async with _cycle_lock:
-        return await _run_cycle_impl()
+        try:
+            return await asyncio.wait_for(_run_cycle_impl(), timeout=300)
+        except asyncio.TimeoutError:
+            logger.error("Cycle timed out after 300s — releasing lock")
+            return {"status": "error", "reason": "cycle_timeout"}
 
 
 async def _run_cycle_impl() -> dict:  # noqa: C901
