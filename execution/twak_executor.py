@@ -51,6 +51,7 @@ class TWAKExecutor:
         self._base_url, self._secret = _load_credentials()
         self.dry_run: bool = os.getenv("DRY_RUN", "true").lower() == "true"
         self._address: str = ""
+        self._wallet_mode_set: bool = False
 
     @property
     def address(self) -> str:
@@ -62,7 +63,22 @@ class TWAKExecutor:
             "Content-Type": "application/json",
         }
 
+    async def _ensure_local_wallet(self) -> None:
+        """Set TWAK to local wallet mode once per executor instance."""
+        if self._wallet_mode_set:
+            return
+        try:
+            url = f"{self._base_url}/actions/switch_wallet_mode"
+            async with httpx.AsyncClient(timeout=15) as client:
+                await client.post(url, json={"mode": "local"}, headers=self._headers())
+            logger.info("TWAK wallet mode → local")
+        except Exception as exc:
+            logger.debug("switch_wallet_mode skipped: %s", exc)
+        self._wallet_mode_set = True
+
     async def _call(self, action: str, params: dict) -> dict:
+        if action != "switch_wallet_mode":
+            await self._ensure_local_wallet()
         url = f"{self._base_url}/actions/{action}"
         async with httpx.AsyncClient(timeout=60) as client:
             resp = await client.post(url, json=params, headers=self._headers())
@@ -77,17 +93,7 @@ class TWAKExecutor:
         return data
 
     async def init_address(self) -> str:
-        """Fetch the TWAK wallet BSC address.
-
-        Calls switch_wallet_mode(local) first so TWAK uses the local agent
-        wallet even if the wallet wasn't auto-bound on server startup.
-        """
-        try:
-            await self._call("switch_wallet_mode", {"mode": "local"})
-            logger.info("TWAK wallet mode set to local")
-        except Exception as exc:
-            logger.debug("switch_wallet_mode skipped (already set or not needed): %s", exc)
-
+        """Fetch the TWAK wallet BSC address."""
         try:
             data = await self._call("get_address", {"chain": _get_chain()})
             self._address = data.get("address", "")
