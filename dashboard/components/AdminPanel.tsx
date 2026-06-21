@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Pause, Play, X, Save, AlertTriangle, Settings, Brain, DollarSign, Target, Zap, Timer } from "lucide-react";
+import { Pause, Play, X, Save, AlertTriangle, Settings, Brain, DollarSign, Target, Zap, Timer, Lock } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import type { BotConfig } from "@/types";
 
@@ -21,6 +21,8 @@ export default function AdminPanel({ config, onUpdate }: Props) {
   const [closing, setClosing] = useState(false);
   const [toggling, setToggling] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [password, setPassword] = useState("");
+  const [authError, setAuthError] = useState(false);
 
   const [posSize, setPosSize] = useState<number>(10);
   const [minConf, setMinConf] = useState<number>(60);
@@ -38,12 +40,18 @@ export default function AdminPanel({ config, onUpdate }: Props) {
     }
   }, [config]);
 
+  const adminHeaders = () => ({
+    "Content-Type": "application/json",
+    "x-admin-password": password,
+  });
+
   const handleSave = async () => {
     setSaving(true);
+    setAuthError(false);
     try {
-      await fetch("/api/proxy/admin/config", {
+      const res = await fetch("/api/proxy/admin/config", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: adminHeaders(),
         body: JSON.stringify({
           position_size_usd: posSize,
           min_confidence: minConf / 100,
@@ -52,6 +60,7 @@ export default function AdminPanel({ config, onUpdate }: Props) {
           monitor_interval_minutes: monitorInterval,
         }),
       });
+      if (res.status === 401) { setAuthError(true); return; }
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
       onUpdate();
@@ -62,8 +71,10 @@ export default function AdminPanel({ config, onUpdate }: Props) {
 
   const handleTogglePause = async () => {
     setToggling(true);
+    setAuthError(false);
     try {
-      await fetch("/api/proxy/admin/pause", { method: "POST" });
+      const res = await fetch("/api/proxy/admin/pause", { method: "POST", headers: adminHeaders() });
+      if (res.status === 401) { setAuthError(true); return; }
       onUpdate();
     } finally {
       setToggling(false);
@@ -73,8 +84,10 @@ export default function AdminPanel({ config, onUpdate }: Props) {
   const handleCloseAll = async () => {
     if (!confirm("Close ALL open positions at current market price?")) return;
     setClosing(true);
+    setAuthError(false);
     try {
-      const res = await fetch("/api/proxy/admin/close-all", { method: "POST" });
+      const res = await fetch("/api/proxy/admin/close-all", { method: "POST", headers: adminHeaders() });
+      if (res.status === 401) { setAuthError(true); setClosing(false); return; }
       const data = await res.json();
       alert(`Closed ${data.closed} position(s).`);
       onUpdate();
@@ -133,6 +146,25 @@ export default function AdminPanel({ config, onUpdate }: Props) {
             </div>
 
             <div className="flex-1 px-6 py-5 space-y-6">
+
+              {/* Password */}
+              <section>
+                <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3 flex items-center gap-1.5">
+                  <Lock size={12} /> Admin Password
+                </h3>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => { setPassword(e.target.value); setAuthError(false); }}
+                  placeholder="Enter admin password"
+                  className={`w-full px-3 py-2.5 text-sm bg-surface-2 border rounded-xl text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 ${
+                    authError ? "border-loss focus:ring-loss/50" : "border-border-subtle focus:ring-accent/50"
+                  }`}
+                />
+                {authError && (
+                  <p className="mt-1.5 text-xs text-loss font-medium">Incorrect password</p>
+                )}
+              </section>
 
               {/* Pause / Resume */}
               <section>

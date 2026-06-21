@@ -54,6 +54,9 @@ class Config:
     TWAK_WALLET_NAME: str = os.getenv("TWAK_WALLET_NAME", "alphaloop")
     TWAK_HMAC_SECRET: str = os.getenv("TWAK_HMAC_SECRET", "")
 
+    # Admin password (protects POST /admin/* endpoints)
+    ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "")
+
     # Competition guards
     COMPETITION_MODE: bool = os.getenv("COMPETITION_MODE", "false").lower() == "true"
     INITIAL_PORTFOLIO_USD: float = float(os.getenv("INITIAL_PORTFOLIO_USD", "1000"))

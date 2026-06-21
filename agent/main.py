@@ -30,7 +30,7 @@ def _patch_ssl_if_needed() -> None:
 
 _patch_ssl_if_needed()
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import JSONResponse
 
 from agent.competition import get_competition_status
@@ -479,8 +479,14 @@ async def admin_get_config() -> dict:
     return _config_dict(cfg)
 
 
+def _check_admin_password(x_admin_password: str = "") -> None:
+    if config.ADMIN_PASSWORD and x_admin_password != config.ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Invalid admin password")
+
+
 @app.post("/admin/config", tags=["admin"])
-async def admin_update_config(body: dict) -> dict:
+async def admin_update_config(body: dict, x_admin_password: str = Header(default="")) -> dict:
+    _check_admin_password(x_admin_password)
     """Update runtime bot configuration. Send only the fields you want to change.
 
     Accepted fields: paused, position_size_usd, min_confidence,
@@ -525,7 +531,8 @@ async def admin_update_config(body: dict) -> dict:
 
 
 @app.post("/admin/pause", tags=["admin"])
-async def admin_toggle_pause() -> dict:
+async def admin_toggle_pause(x_admin_password: str = Header(default="")) -> dict:
+    _check_admin_password(x_admin_password)
     """Toggle the bot pause state."""
     cfg = await get_bot_config()
     new_state = not cfg.paused
@@ -535,7 +542,8 @@ async def admin_toggle_pause() -> dict:
 
 
 @app.post("/admin/close-all", tags=["admin"])
-async def admin_close_all() -> dict:
+async def admin_close_all(x_admin_password: str = Header(default="")) -> dict:
+    _check_admin_password(x_admin_password)
     """Emergency: close all open positions at current market price."""
     from agent.scheduler import _get_token_price
     open_trades = await list_open_buy_trades()

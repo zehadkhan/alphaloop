@@ -14,12 +14,14 @@ export async function GET() {
 export async function POST(req: Request) {
   try {
     const body = await req.json();
+    const password = req.headers.get("x-admin-password") ?? "";
     const res = await fetch(`${BACKEND}/admin/config`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "x-admin-password": password },
       body: JSON.stringify(body),
     });
-    return NextResponse.json(await res.json());
+    const data = await res.json();
+    return NextResponse.json(data, { status: res.status });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }
