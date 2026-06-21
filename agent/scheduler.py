@@ -271,6 +271,18 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
             market_data["percent_change_24h"], btc_dominance,
         )
 
+        # ── Equity-reliability guard — skip on bad RPC/API data ───────────
+        price = market_data.get("price", 0)
+        volume = market_data.get("volume_24h", 0)
+        if not price or price <= 0 or not volume or len(ohlcv_data) < 10:
+            logger.warning(
+                "[Guard] Unreliable market data (price=%.4f, vol=%.0f, candles=%d) — skipping cycle",
+                price, volume, len(ohlcv_data),
+            )
+            await _finish_run(run.id, 0, 0, 0.0, None)
+            return _result("skipped", run.id, reason="unreliable_data",
+                           price=price, volume=volume, candles=len(ohlcv_data))
+
         # ── 2. Compute technical indicators ───────────────────────────────
         logger.info("[2/7] Computing technical indicators…")
         df         = _ohlcv_to_dataframe(ohlcv_data)
