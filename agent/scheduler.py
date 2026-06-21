@@ -39,7 +39,12 @@ from db.models import (
 
 logger = logging.getLogger(__name__)
 
-scheduler = AsyncIOScheduler()
+scheduler = AsyncIOScheduler(
+    job_defaults={
+        "misfire_grace_time": 600,  # 10-min grace — survives busy event loops
+        "coalesce": True,           # collapse multiple misfires into one run
+    }
+)
 
 _cycle_lock = asyncio.Lock()
 
