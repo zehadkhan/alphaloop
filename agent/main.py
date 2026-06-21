@@ -350,7 +350,7 @@ def _activity_item(run: AgentRun, strategies: list, trades: list) -> dict:
             **base,
             "type": "trade",
             "color": "green",
-            "title": f"Claude bought ${t.amount_usd:.2f} of {s.symbol} at ${s.entry_price:,.2f}",
+            "title": f"AlphaLoop bought ${t.amount_usd:.2f} of {s.symbol} at ${s.entry_price:,.2f}",
             "detail": (
                 f"Confidence {conf_pct}% · "
                 f"Stop-loss ${s.stop_loss:,.2f} · "
@@ -372,7 +372,7 @@ def _activity_item(run: AgentRun, strategies: list, trades: list) -> dict:
             **base,
             "type": "hold",
             "color": "yellow",
-            "title": f"Claude analyzed {s.symbol} and decided to wait — no clear signal yet",
+            "title": f"AlphaLoop analyzed {s.symbol} and decided to wait — no clear signal yet",
             "detail": f"Confidence only {conf_pct}% — needs to be higher before placing a trade",
             "reasoning": s.reasoning[:500] if s.reasoning else None,
             "symbol": s.symbol,
@@ -391,7 +391,7 @@ def _activity_item(run: AgentRun, strategies: list, trades: list) -> dict:
             **base,
             "type": "rejected",
             "color": "orange",
-            "title": f"Claude's {s.symbol} idea was tested and rejected — historical results too weak",
+            "title": f"AlphaLoop's {s.symbol} signal was tested and rejected — historical results too weak",
             "detail": detail,
             "reasoning": s.reasoning[:500] if s.reasoning else None,
             "symbol": s.symbol,
