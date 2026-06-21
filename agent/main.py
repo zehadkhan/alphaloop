@@ -5,7 +5,7 @@ import logging
 import logging.config
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 
 # ── SSL fallback: if certifi's CA file is unreadable (e.g., Docker overlay on a
 #    full disk returns EIO), patch it to use the system CA bundle instead.
@@ -137,7 +137,11 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 
 def _fmt_dt(dt: datetime | None) -> str | None:
-    return dt.isoformat() if dt else None
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.isoformat()
 
 
 def _strategy_dict(s: Strategy) -> dict:
