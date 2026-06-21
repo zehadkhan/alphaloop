@@ -213,7 +213,7 @@ def _config_dict(c: BotConfig) -> dict:
 # Endpoints
 # ---------------------------------------------------------------------------
 
-@app.get("/health", tags=["system"])
+@app.api_route("/health", methods=["GET", "HEAD"], tags=["system"])
 async def health() -> dict:
     """Liveness check — also returns live BNB price."""
     from agent.scheduler import _get_bnb_price
