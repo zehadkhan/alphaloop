@@ -26,20 +26,27 @@ class Config:
 
     # Token scanner
     TOKEN_SCAN_TOP_N: int = int(os.getenv("TOKEN_SCAN_TOP_N", "3"))   # scan top N momentum tokens
-    # Eligible BSC tokens — sourced directly from the BNB HACK competition allowlist.
-    # BNB is excluded (not in competition's BEP-20 eligible list).
-    # Stablecoins excluded (no price movement = no signal).
+    # Eligible BSC tokens — full competition allowlist (149 tokens), filtered to those
+    # with Binance USDT spot pairs (scanner uses Binance). Stablecoins excluded (no signal).
+    # Chinese-character tokens and non-Binance-listed exotics excluded gracefully by scanner.
     ELIGIBLE_TOKENS: list[str] = [
-        # High-liquidity DeFi
-        "ETH", "CAKE", "LINK", "UNI", "AAVE", "COMP", "SNX", "1INCH", "SUSHI",
-        # Layer-1s with good BSC bridge liquidity
-        "ADA", "DOT", "AVAX", "ATOM", "XRP", "TRX", "LTC", "BCH", "ETC",
-        # Meme / high-volatility (more trading signals)
-        "DOGE", "SHIB", "FLOKI", "BONK", "APE",
-        # AI + trending DeFi
-        "FET", "INJ", "LDO", "PENDLE",
-        # Others with solid BSC presence
-        "AXS", "YFI", "FIL",
+        # Major L1/L2
+        "ETH", "XRP", "ADA", "DOT", "AVAX", "ATOM", "LTC", "BCH", "ETC",
+        "TRX", "ZEC", "TON", "ZIL", "ROSE", "KAVA", "ELF", "ACH", "AXL",
+        # DeFi blue chips
+        "LINK", "UNI", "AAVE", "COMP", "SNX", "1INCH", "SUSHI", "YFI",
+        "CAKE", "LDO", "PENDLE", "STG", "RAY",
+        # AI + infra
+        "FET", "INJ", "FIL", "PEAQ", "AIOZ", "LAB",
+        # Meme / high-vol
+        "DOGE", "SHIB", "FLOKI", "BONK", "APE", "LUNC", "BRETT",
+        "BABYDOGE", "CHEEMS",
+        # BNB ecosystem
+        "TWT", "AXS", "SFP", "NFT", "BTT",
+        # Mid-cap with Binance liquidity
+        "ZRO", "BAT", "XCN", "DEXE", "FORM", "HTX", "DUSK", "SUSHI",
+        "SNX", "APR", "VELO", "ZETA", "IRYS", "BEAM", "ZIG", "PLUME",
+        "HUMA", "OPEN", "BAS", "TOSHI", "NILA",
     ]
 
     # TWAK REST server
