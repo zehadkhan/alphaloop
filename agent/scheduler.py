@@ -596,12 +596,16 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
 # ---------------------------------------------------------------------------
 
 def start_scheduler(interval_minutes: int = 30) -> None:
+    from datetime import datetime, timezone, timedelta
+    first_run = datetime.now(timezone.utc) + timedelta(seconds=30)
+
     scheduler.add_job(
         run_agent_cycle,
-        trigger=IntervalTrigger(minutes=interval_minutes),
+        trigger=IntervalTrigger(minutes=interval_minutes, start_date=first_run),
         id="agent_cycle",
         replace_existing=True,
         max_instances=1,
+        next_run_time=first_run,
     )
     scheduler.add_job(
         monitor_open_trades,
