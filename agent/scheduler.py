@@ -359,6 +359,23 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
 
         if strategy["action"] == "HOLD":
             logger.info("Action=HOLD — no trade this cycle")
+            # Save HOLD strategy to DB (abstention ledger — every non-trade is recorded)
+            try:
+                await create_strategy({
+                    "symbol":          symbol,
+                    "action":          "HOLD",
+                    "confidence":      strategy.get("confidence", 0.0),
+                    "entry_price":     strategy.get("entry_price", 0.0),
+                    "stop_loss":       strategy.get("stop_loss", 0.0),
+                    "take_profit":     strategy.get("take_profit", 0.0),
+                    "reasoning":       strategy.get("reasoning", "Market conditions unfavorable"),
+                    "timeframe":       strategy.get("timeframe", "short"),
+                    "risk_level":      strategy.get("risk_level", "low"),
+                    "status":          "rejected",
+                    "backtest_passed": False,
+                })
+            except Exception as exc:
+                logger.debug("Could not save HOLD strategy: %s", exc)
             await _finish_run(run.id, strategies_generated, 0, 0.0, None)
             return _result("skipped", run.id, reason="HOLD")
 
@@ -377,6 +394,22 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
                 "Confidence %.2f < %.2f threshold (%s mode) — skipping",
                 strategy["confidence"], min_confidence, _compliance_mode,
             )
+            try:
+                await create_strategy({
+                    "symbol":          symbol,
+                    "action":          strategy.get("action", "HOLD"),
+                    "confidence":      strategy["confidence"],
+                    "entry_price":     strategy.get("entry_price", 0.0),
+                    "stop_loss":       strategy.get("stop_loss", 0.0),
+                    "take_profit":     strategy.get("take_profit", 0.0),
+                    "reasoning":       f"[Low confidence: {strategy['confidence']:.0%} < {min_confidence:.0%} threshold] {strategy.get('reasoning', '')}",
+                    "timeframe":       strategy.get("timeframe", "short"),
+                    "risk_level":      strategy.get("risk_level", "low"),
+                    "status":          "rejected",
+                    "backtest_passed": False,
+                })
+            except Exception as exc:
+                logger.debug("Could not save low-confidence strategy: %s", exc)
             await _finish_run(run.id, strategies_generated, 0, 0.0, None)
             return _result("skipped", run.id, reason="low_confidence",
                            confidence=strategy["confidence"],
