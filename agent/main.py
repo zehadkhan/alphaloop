@@ -215,10 +215,20 @@ def _config_dict(c: BotConfig) -> dict:
 
 @app.api_route("/health", methods=["GET", "HEAD"], tags=["system"])
 async def health() -> dict:
-    """Liveness check — also returns live BNB price."""
+    """Liveness check — also returns live BNB price and x402 integration status."""
     from agent.scheduler import _get_bnb_price
+    from data.cmc_client import _X402_ENABLED, _TWAK_X402_MODE, _USE_AGENT_HUB
     bnb_price = await _get_bnb_price()
-    return {"status": "ok", "environment": config.ENVIRONMENT, "bnb_price": bnb_price}
+    return {
+        "status": "ok",
+        "environment": config.ENVIRONMENT,
+        "bnb_price": bnb_price,
+        "x402": {
+            "enabled": _X402_ENABLED,
+            "twak_x402_mode": _TWAK_X402_MODE,
+            "agent_hub_mode": _USE_AGENT_HUB,
+        },
+    }
 
 
 @app.get("/status", tags=["system"])
@@ -641,3 +651,33 @@ async def token_scan() -> dict:
     scanner = TokenScanner(config.ELIGIBLE_TOKENS)
     top = await scanner.scan(top_n=config.TOKEN_SCAN_TOP_N)
     return {"top_tokens": top, "scanned": len(config.ELIGIBLE_TOKENS)}
+
+
+@app.post("/twak/x402-test", tags=["competition"])
+async def twak_x402_test() -> dict:
+    """Test TWAK x402 micropayment for CMC Agent Hub data.
+
+    Routes a CMC quote request through TWAK's native x402_request action.
+    TWAK handles payment signing — no manual key management needed.
+    """
+    from data.cmc_client import _X402_ENABLED, _TWAK_X402_MODE, CMC_BASE
+    from execution.twak_executor import TWAKExecutor, TWAKExecutorError
+
+    if not config.TWAK_REST_URL:
+        return {"ok": False, "reason": "TWAK not configured"}
+
+    test_url = f"{CMC_BASE}/v1/cryptocurrency/quotes/latest?symbol=BNB&convert=USD"
+    try:
+        executor = TWAKExecutor()
+        result = await executor.x402_request(test_url, method="GET", max_payment_atomic="1000")
+        return {
+            "ok": True,
+            "x402_enabled": _X402_ENABLED,
+            "twak_x402_mode": _TWAK_X402_MODE,
+            "test_url": test_url,
+            "response_keys": list(result.keys()) if isinstance(result, dict) else str(type(result)),
+        }
+    except TWAKExecutorError as exc:
+        return {"ok": False, "x402_enabled": _X402_ENABLED, "twak_x402_mode": _TWAK_X402_MODE, "error": str(exc)}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}

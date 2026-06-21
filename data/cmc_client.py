@@ -26,7 +26,7 @@ _QUOTE_PATH    = "/agent/v1/cryptocurrency/quotes/latest" if _USE_AGENT_HUB else
 _METRICS_PATH  = "/agent/v1/global-metrics/quotes/latest" if _USE_AGENT_HUB else "/v1/global-metrics/quotes/latest"
 
 # x402 micropayment support — enabled when CMC Agent Hub access is configured
-_X402_ENABLED   = os.getenv("X402_ENABLED", "false").lower() == "true"
+_X402_ENABLED   = os.getenv("X402_ENABLED", "true").lower() == "true"
 _X402_RECIPIENT = os.getenv("X402_RECIPIENT", "")  # CMC Agent Hub payment address
 
 # When TWAK is running, route Agent Hub x402 calls through TWAK's native x402_request.

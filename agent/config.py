@@ -57,6 +57,10 @@ class Config:
     # Admin password (protects POST /admin/* endpoints)
     ADMIN_PASSWORD: str = os.getenv("ADMIN_PASSWORD", "")
 
+    # x402 micropayment integration (CMC Agent Hub via TWAK)
+    X402_ENABLED: bool = os.getenv("X402_ENABLED", "true").lower() == "true"
+    CMC_AGENT_HUB_URL: str = os.getenv("CMC_AGENT_HUB_URL", "")
+
     # Competition guards
     COMPETITION_MODE: bool = os.getenv("COMPETITION_MODE", "false").lower() == "true"
     INITIAL_PORTFOLIO_USD: float = float(os.getenv("INITIAL_PORTFOLIO_USD", "1000"))

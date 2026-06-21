@@ -1,6 +1,6 @@
 "use client";
 
-import { Shield, Wallet, CheckCircle2, XCircle, AlertTriangle, ExternalLink } from "lucide-react";
+import { Shield, CheckCircle2, XCircle, AlertTriangle, ExternalLink, Zap, FileCheck } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { TwakStatus } from "@/types";
@@ -119,6 +119,37 @@ export default function TwakStatusCard({ status }: Props) {
             value={`$${status.balance.BNB.price_usdt.toLocaleString("en-US", { maximumFractionDigits: 2 })}`}
             valueClass="text-text-primary"
           />
+        )}
+
+        {/* x402 + Policy commitment */}
+        {status.twak_configured && (
+          <div className="pt-1 space-y-0 border-t border-border-subtle/40 mt-1">
+            <p className="text-[9px] text-text-muted/60 uppercase tracking-widest mb-1.5 font-semibold">Verifiability</p>
+            <Row
+              label="x402 Payments"
+              value={
+                <span className="flex items-center gap-1 text-profit">
+                  <Zap size={9} />
+                  Enabled
+                </span>
+              }
+            />
+            <Row
+              label="Risk Policy"
+              value={
+                <a
+                  href="https://github.com/zehadkhan/alphaloop/blob/main/storage/policy_commitment.json"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center gap-1 text-accent hover:opacity-80"
+                >
+                  <FileCheck size={9} />
+                  Signed
+                  <ExternalLink size={8} />
+                </a>
+              }
+            />
+          </div>
         )}
       </CardContent>
     </Card>
