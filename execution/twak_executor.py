@@ -17,6 +17,54 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+# Module-level cache: symbol → BSC contract address (persists across executor instances per process)
+_bsc_address_cache: dict[str, str] = {}
+
+# Tokens TWAK recognises by symbol without needing a contract address
+_TWAK_KNOWN_SYMBOLS = {"BNB", "ETH", "USDT", "USDC", "BUSD", "WBTC", "BTC", "CAKE"}
+
+
+async def _resolve_bsc_token(symbol: str) -> str:
+    """Return the best identifier for *symbol* that TWAK's swap endpoint accepts.
+
+    Returns the symbol as-is for well-known tokens. For others, queries CMC to get
+    the BEP-20 contract address (cached per process). Falls back to the symbol if
+    the lookup fails so the caller can still attempt the swap.
+    """
+    sym = symbol.upper()
+    if sym in _TWAK_KNOWN_SYMBOLS:
+        return sym
+    if sym in _bsc_address_cache:
+        return _bsc_address_cache[sym]
+
+    cmc_key = os.getenv("CMC_API_KEY", "")
+    if not cmc_key:
+        logger.warning("[TWAK] CMC_API_KEY not set — cannot resolve BSC address for %s", sym)
+        return sym
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://pro-api.coinmarketcap.com/v1/cryptocurrency/info",
+                params={"symbol": sym},
+                headers={"X-CMC_PRO_API_KEY": cmc_key, "Accept": "application/json"},
+            )
+        token_data = resp.json().get("data", {}).get(sym, {})
+        if isinstance(token_data, list):
+            token_data = token_data[0]
+
+        for ca in token_data.get("contract_address", []):
+            platform_name = ca.get("platform", {}).get("name", "").lower()
+            if "bnb smart chain" in platform_name or "bep20" in platform_name:
+                addr = ca["contract_address"]
+                _bsc_address_cache[sym] = addr
+                logger.info("[TWAK] Resolved %s → BSC address %s", sym, addr)
+                return addr
+    except Exception as exc:
+        logger.warning("[TWAK] BSC address lookup failed for %s: %s", sym, exc)
+
+    return sym
+
 def _get_chain() -> str:
     """Return the TWAK chain identifier — read at call time so Docker env vars are loaded."""
     return "bsc" if os.getenv("ENVIRONMENT", "testnet") == "mainnet" else "bsc-testnet"
@@ -90,6 +138,11 @@ class TWAKExecutor:
                 f"TWAK {action} failed ({resp.status_code}): "
                 f"{data.get('message', data)}"
             )
+        # TWAK returns HTTP 200 even for logical errors — check the success flag
+        if data.get("success") is False:
+            code = data.get("code", "UNKNOWN")
+            msg  = data.get("message", str(data))
+            raise TWAKExecutorError(f"TWAK {action} error [{code}]: {msg}")
         return data
 
     async def init_address(self) -> str:
@@ -195,11 +248,21 @@ class TWAKExecutor:
                 "status":     "dry_run",
             }
 
+        # Resolve token symbols to BSC contract addresses where needed.
+        # TWAK only recognises major symbols (ETH, BNB, USDT…); altcoins require
+        # the BEP-20 contract address so the router can find the liquidity pool.
+        from_resolved = await _resolve_bsc_token(token_in)
+        to_resolved   = await _resolve_bsc_token(token_out)
+        logger.info(
+            "[TWAK] Token resolution: %s→%s  %s→%s",
+            token_in, from_resolved, token_out, to_resolved,
+        )
+
         data = await self._call("swap", {
             "fromChain": _get_chain(),
-            "fromToken": token_in,
+            "fromToken": from_resolved,
             "toChain":   _get_chain(),
-            "toToken":   token_out,
+            "toToken":   to_resolved,
             "amount":    amount_str,
         })
 
@@ -208,6 +271,12 @@ class TWAKExecutor:
                      or data.get("transactionHash") or data.get("receipt", {}).get("transactionHash"))
         amount_out = float(data.get("toAmount") or data.get("receivedAmount")
                           or data.get("amountOut") or 0)
+        # TWAK response includes a human-readable summary: "0.001 BNB -> 0.0354 DEXE"
+        if not amount_out and data.get("summary"):
+            try:
+                amount_out = float(data["summary"].split("->")[1].strip().split()[0])
+            except Exception:
+                pass
         price      = amount_out / float(amount_str) if float(amount_str) else 0
 
         logger.info(
