@@ -124,9 +124,9 @@ export default function StatsRow({
   initialPortfolio = 1000,
   currentPrice,
 }: Props) {
-  // Closed trades
+  // Closed trades (exclude failed trades that have pnl_usd set but never actually executed)
   const closedTrades = trades.filter(
-    (t) => t.pnl_usd !== null && t.closed_at !== null
+    (t) => t.pnl_usd !== null && t.closed_at !== null && t.status !== "failed"
   );
   // Only count trades with meaningful price movement (>= $0.01) in win/loss calc
   const decidedTrades  = closedTrades.filter((t) => Math.abs(t.pnl_usd ?? 0) >= 0.01);
@@ -139,9 +139,9 @@ export default function StatsRow({
   // Realised PnL
   const realisedPnl = closedTrades.reduce((s, t) => s + (t.pnl_usd ?? 0), 0);
 
-  // Unrealised PnL from open BUY trades
+  // Unrealised PnL from open BUY trades (exclude failed/pending — only executed positions)
   const openTrades = trades.filter(
-    (t) => t.closed_at === null && t.action === "BUY"
+    (t) => t.closed_at === null && t.action === "BUY" && (t.status === "executed" || t.status === "dry_run")
   );
   const unrealisedPnl = currentPrice
     ? openTrades.reduce(
