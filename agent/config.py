@@ -46,7 +46,7 @@ class Config:
         # Mid-cap with Binance liquidity
         "ZRO", "BAT", "XCN", "DEXE", "FORM", "HTX", "DUSK", "SUSHI",
         "SNX", "APR", "VELO", "ZETA", "IRYS", "BEAM", "ZIG", "PLUME",
-        "HUMA", "OPEN", "BAS", "TOSHI", "NILA",
+        "HUMA", "OPEN",
     ]
 
     # TWAK REST server

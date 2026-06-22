@@ -329,7 +329,12 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
         logger.info("[1/7] Fetching market data…")
         async with CMCClient() as cmc:
             market_data = await cmc.get_quote(symbol)
-            ohlcv_data  = await cmc.get_ohlcv(symbol, time_period="daily", count=60)
+            try:
+                ohlcv_data = await cmc.get_ohlcv(symbol, time_period="daily", count=60)
+            except RuntimeError as exc:
+                logger.warning("[Data] Daily OHLCV failed for %s (%s) — skipping token", symbol, exc)
+                await _finish_run(run.id, 0, 0, 0.0, f"ohlcv_failed:{symbol}")
+                return _result("skipped", run.id, reason="ohlcv_unavailable", symbol=symbol)
             try:
                 ohlcv_4h = await cmc.get_ohlcv(symbol, time_period="4h", count=100)
             except Exception as exc:
