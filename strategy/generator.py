@@ -82,10 +82,12 @@ For SELL action (current price ≈ {price:.2f}):
 For HOLD action: entry_price, stop_loss, take_profit = current price (placeholder only).
 
 Signal requirements — you MUST see at least 2 of these confirming signals before BUY/SELL:
-  BUY: RSI 1h between 40–65 (not overbought), price above SMA20, volume spike ≥ 1.5×, positive 1h momentum
-  SELL: RSI 1h between 35–60 (not oversold), price below SMA20, volume spike ≥ 1.5×, negative 1h momentum
+  BUY: RSI 1h between 40–65 (not overbought), price above SMA20 (1h), volume spike ≥ 1.5×, positive 1h momentum
+  SELL: RSI 1h between 35–60 (not oversold), price below SMA20 (1h), volume spike ≥ 1.5×, negative 1h momentum
   If fewer than 2 signals align → HOLD.
 
+IMPORTANT — compass score is informational context only. Do NOT use it as an entry gate.
+The only entry gate is: 2+ signals above AND confidence ≥ 0.45.
 R/R must be ≥ 1.5 (tp_distance / sl_distance ≥ 1.5).
 Low-cap tokens moving on volume spikes are preferred over slow large-caps.
 """

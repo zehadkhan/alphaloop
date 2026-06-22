@@ -186,7 +186,7 @@ async def run_agent_cycle() -> dict:
 
 async def _run_cycle_impl() -> dict:  # noqa: C901
     global _last_compass
-    quote = "USDT"  # scalping mode: all trades vs USDT
+    quote = "BNB"   # wallet holds BNB; PancakeSwap routes BNB↔token on BSC
 
     # ── Read runtime admin config overrides ───────────────────────────────
     bot_cfg   = await get_bot_config()
