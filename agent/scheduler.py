@@ -601,7 +601,29 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
             compass["regime"], drawdown_zone["zone"],
         )
 
-        swap = await executor.swap(token_in, token_out, position_usd)
+        try:
+            swap = await executor.swap(token_in, token_out, position_usd)
+        except Exception as swap_exc:
+            # Swap failed (TWAK routing error, insufficient liquidity, etc.)
+            # Record as a failed trade and finish cleanly — don't crash the cycle.
+            err_msg = f"{type(swap_exc).__name__}: {swap_exc}"
+            logger.error("[Swap] Failed for %s: %s", symbol, err_msg)
+            await create_trade({
+                "strategy_id": db_strategy.id,
+                "symbol":      symbol,
+                "action":      strategy["action"],
+                "amount_usd":  position_usd,
+                "entry_price": strategy["entry_price"],
+                "tx_hash":     None,
+                "status":      "failed",
+                "executed_at": datetime.now(timezone.utc),
+                "proof_hash":  proof_hash,
+                "proof_string": proof_string,
+            })
+            await _finish_run(run.id, strategies_generated, 0, 0.0, err_msg)
+            return _result("skipped", run.id, reason="swap_failed", error=err_msg,
+                           symbol=symbol, action=strategy["action"])
+
         trades_executed = 1
 
         logger.info(

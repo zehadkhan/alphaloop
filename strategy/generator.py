@@ -275,20 +275,25 @@ class StrategyGenerator:
         return base_prompt
 
     async def _call_claude(self, user_prompt: str) -> str:
+        system = [
+            {
+                "type": "text",
+                "text": _SYSTEM_PROMPT,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+        # Prefill forces Claude to start with '{' — guarantees JSON output
+        prefill = "{"
         try:
             message = await self._client.messages.create(
                 model=MODEL,
                 max_tokens=512,
-                temperature=0.2,   # low temp for deterministic structured output
-                # Cache the static system prompt — saves tokens on every cycle
-                system=[
-                    {
-                        "type": "text",
-                        "text": _SYSTEM_PROMPT,
-                        "cache_control": {"type": "ephemeral"},
-                    }
+                temperature=0.2,
+                system=system,
+                messages=[
+                    {"role": "user",      "content": user_prompt},
+                    {"role": "assistant", "content": prefill},
                 ],
-                messages=[{"role": "user", "content": user_prompt}],
             )
         except anthropic.APIStatusError as exc:
             raise StrategyGeneratorError(
@@ -297,7 +302,7 @@ class StrategyGenerator:
         except anthropic.APIConnectionError as exc:
             raise StrategyGeneratorError(f"Network error: {exc}") from exc
 
-        raw = message.content[0].text
+        raw = prefill + message.content[0].text
         logger.debug(
             "Claude response: input_tokens=%d output_tokens=%d cache_read=%d",
             message.usage.input_tokens,
