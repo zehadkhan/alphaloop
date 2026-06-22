@@ -489,11 +489,13 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
             win_rate=backtest["win_rate"],
         )
 
-        if not backtest["passed"]:
+        if not backtest["passed"] and not _force_execute:
             logger.info("Backtest failed — skipping execution")
             await _finish_run(run.id, strategies_generated, 0, 0.0, None)
             return _result("skipped", run.id, reason="backtest_failed",
                            strategy_id=db_strategy.id, backtest=backtest["summary"])
+        if not backtest["passed"] and _force_execute:
+            logger.warning("[Compliance] HARD/ALERT: backtest failed but force_execute=True — proceeding")
 
         # ── 7. Execute swap ───────────────────────────────────────────────
         if config.TWAK_REST_URL:
