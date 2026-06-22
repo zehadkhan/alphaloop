@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { CheckCircle2, AlertTriangle, Info, X, RefreshCw } from "lucide-react";
 import Header from "@/components/Header";
 import StatsRow from "@/components/StatsRow";
@@ -163,6 +163,46 @@ export default function Dashboard() {
   const hasClosedTrades = trades.some((t) => t.pnl_usd != null && t.closed_at != null);
   const initialPortfolio = competition?.initial_portfolio_usd ?? 1000;
 
+  const openTrade = useMemo(
+    () =>
+      trades.find(
+        (t) =>
+          t.action === "BUY" &&
+          t.closed_at === null &&
+          (t.status === "dry_run" || t.status === "executed")
+      ),
+    [trades]
+  );
+
+  const [positionPrice, setPositionPrice] = useState<number | null>(null);
+
+  useEffect(() => {
+    const sym = openTrade?.symbol;
+    if (!sym) {
+      setPositionPrice(null);
+      return;
+    }
+    const pair = `${sym.toUpperCase()}USDT`;
+    const load = () => {
+      fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${pair}`)
+        .then((r) => r.json())
+        .then((d) => setPositionPrice(parseFloat(d.price)))
+        .catch(() => {});
+    };
+    load();
+    const id = setInterval(load, 5_000);
+    return () => clearInterval(id);
+  }, [openTrade?.symbol]);
+
+  // Mark price for open-position PnL — must match trade symbol, not always BNB
+  const markPrice =
+    openTrade && positionPrice != null
+      ? positionPrice
+      : health?.bnb_price ?? null;
+  const markPair = openTrade
+    ? `${openTrade.symbol}/USDT`
+    : status?.trading_pair ?? "BNB/USDT";
+
   if (loading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -186,6 +226,8 @@ export default function Dashboard() {
         monitoring={monitoring}
         onRunNow={handleRunNow}
         onMonitor={handleMonitor}
+        livePair={markPair}
+        livePrice={markPrice}
       />
 
       {/* Toast notifications */}
@@ -214,7 +256,7 @@ export default function Dashboard() {
           trades={trades}
           runs={runs}
           initialPortfolio={initialPortfolio}
-          currentPrice={health?.bnb_price ?? null}
+          currentPrice={markPrice}
         />
 
         {/* ── Row 2: Activity + Competition side-by-side ───────────────── */}
@@ -239,14 +281,14 @@ export default function Dashboard() {
             <OpenPositions
               trades={trades}
               strategies={strategies}
-              currentPrice={health?.bnb_price ?? null}
+              currentPrice={markPrice}
             />
           </div>
         ) : (
           <OpenPositions
             trades={trades}
             strategies={strategies}
-            currentPrice={health?.bnb_price ?? null}
+            currentPrice={markPrice}
           />
         )}
 

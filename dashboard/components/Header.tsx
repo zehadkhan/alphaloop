@@ -15,6 +15,8 @@ type Props = {
   monitoring: boolean;
   onRunNow: () => void;
   onMonitor: () => void;
+  livePair?: string;
+  livePrice?: number | null;
 };
 
 export default function Header({
@@ -25,16 +27,18 @@ export default function Header({
   monitoring,
   onRunNow,
   onMonitor,
+  livePair,
+  livePrice,
 }: Props) {
   const isAlive = health?.status === "ok";
-  const bnbPrice = health?.bnb_price;
+  const tickerPrice = livePrice ?? health?.bnb_price;
   const isDryRun = status?.dry_run ?? true;
   const isTWAK = status?.signing_backend === "twak";
   const isCompetition = status?.competition_mode ?? false;
   const isLive = isCompetition && !isDryRun;
   const nextJob = status?.scheduled_jobs?.find((j) => j.id === "agent_cycle")?.next_run;
   const openPositions = status?.open_positions ?? 0;
-  const tradingPair = status?.trading_pair ?? "BNB/USDT";
+  const tradingPair = livePair ?? status?.trading_pair ?? "BNB/USDT";
 
   return (
     <header className="sticky top-0 z-40 border-b border-border-subtle bg-background/80 backdrop-blur-xl">
@@ -82,7 +86,7 @@ export default function Header({
         {/* ── Center: live price ticker + agent status ─────────────────── */}
         <div className="hidden md:flex items-center gap-4">
           {/* Price ticker */}
-          {bnbPrice != null && (
+          {tickerPrice != null && (
             <div className="flex items-center gap-2">
               {/* Live pulse dot */}
               <span className="relative flex h-2 w-2 shrink-0">
@@ -97,13 +101,13 @@ export default function Header({
 
               {/* Price value */}
               <span className="text-base font-bold text-text-primary font-mono tabular-nums">
-                {formatPrice(bnbPrice)}
+                {formatPrice(tickerPrice)}
               </span>
             </div>
           )}
 
           {/* Divider */}
-          {bnbPrice != null && (
+          {tickerPrice != null && (
             <div className="h-4 w-px bg-border-subtle" />
           )}
 
