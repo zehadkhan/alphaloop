@@ -19,7 +19,12 @@ from strategy.generator import StrategyGenerator
 from strategy.backtester import Backtester
 from execution.wallet import WalletAgent
 from execution.pancakeswap import PancakeSwapExecutor
-from agent.competition import check_drawdown, force_close_stale_positions
+from agent.competition import (
+    COMPETITION_END,
+    COMPETITION_START,
+    check_drawdown,
+    force_close_stale_positions,
+)
 from agent.proof import build_proof, commit_proof_onchain
 from data.token_scanner import TokenScanner
 from db.models import (
@@ -216,46 +221,26 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
             return _result("skipped", 0, reason="drawdown_halt",
                            drawdown_pct=dd_pre["drawdown_pct"])
 
-    # ── Smart compliance window — escalate when daily trade quota not met ──
-    # Competition requires ≥1 trade/day. Gates relax progressively through the day
-    # so we don't wait until 22 UTC (old bug: alert only fired for exactly hour 22).
+    # ── Daily trade quota — competition requires ≥1 trade/day ─────────────
+    # When trades_today == 0 inside the live window, force a trade immediately:
+    # override Claude HOLD, skip edge gate + backtest. Escalate further after 23 UTC.
     _force_execute    = False
     _compliance_mode  = "normal"
     if config.COMPETITION_MODE:
+        now          = datetime.now(timezone.utc)
+        in_window    = COMPETITION_START <= now <= COMPETITION_END
         trades_today = await get_daily_trade_count()
-        utc_hour     = datetime.now(timezone.utc).hour
-        if trades_today == 0:
+        utc_hour     = now.hour
+        if in_window and trades_today == 0:
+            _force_execute   = True
+            _compliance_mode = "alert"
+            logger.warning(
+                "[Compliance] Daily trade quota (0 today) — forcing entry, bypassing gates",
+            )
             if utc_hour >= 23:
-                _force_execute   = True
                 _compliance_mode = "hard"
                 logger.warning(
-                    "[Compliance] HARD window (hour=%d UTC) — forcing execution this cycle",
-                    utc_hour,
-                )
-            elif utc_hour >= 20:
-                _force_execute   = True
-                _compliance_mode = "alert"
-                logger.warning(
-                    "[Compliance] ALERT+ window (hour=%d UTC) — forcing execution, bypassing backtest",
-                    utc_hour,
-                )
-            elif utc_hour >= 14:
-                _force_execute   = True
-                _compliance_mode = "alert"
-                logger.warning(
-                    "[Compliance] ALERT window (hour=%d UTC) — daily trade needed, bypassing backtest",
-                    utc_hour,
-                )
-            elif utc_hour >= 8:
-                _compliance_mode = "alert"
-                logger.warning(
-                    "[Compliance] ALERT window (hour=%d UTC) — overriding HOLD for daily trade quota",
-                    utc_hour,
-                )
-            else:
-                _compliance_mode = "soft"
-                logger.info(
-                    "[Compliance] SOFT window (hour=%d UTC) — 0 trades today, lowered entry bar",
+                    "[Compliance] HARD window (hour=%d UTC) — last-chance force trade",
                     utc_hour,
                 )
 
