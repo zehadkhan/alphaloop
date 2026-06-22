@@ -203,8 +203,11 @@ class TWAKExecutor:
             "amount":    amount_str,
         })
 
-        tx_hash   = data.get("txHash") or data.get("tx_hash") or data.get("hash")
-        amount_out = float(data.get("toAmount") or data.get("receivedAmount") or 0)
+        logger.info("TWAK swap raw response: %s", data)
+        tx_hash   = (data.get("txHash") or data.get("tx_hash") or data.get("hash")
+                     or data.get("transactionHash") or data.get("receipt", {}).get("transactionHash"))
+        amount_out = float(data.get("toAmount") or data.get("receivedAmount")
+                          or data.get("amountOut") or 0)
         price      = amount_out / float(amount_str) if float(amount_str) else 0
 
         logger.info(
