@@ -224,12 +224,19 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
     open_symbols = {t.symbol for t in open_trades}
     open_count   = len(open_trades)
 
-    # Pick first available token from top scan results
-    symbol = config.TRADING_PAIR.split("/")[0].upper()
+    # Pick first available Binance-listed token from top scan results
+    # (DexScreener-only tokens can't run the full CMC+indicator pipeline)
+    default_symbol = config.TRADING_PAIR.split("/")[0].upper()
+    symbol = default_symbol
     for candidate in top_tokens:
-        if candidate["symbol"] not in open_symbols:
+        if (candidate["symbol"] not in open_symbols
+                and candidate.get("data_source", "binance") != "dexscreener"):
             symbol = candidate["symbol"]
             break
+    # Fallback: if ALL top tokens are dexscreener or held, use default
+    if symbol == default_symbol and default_symbol in open_symbols:
+        logger.info("Position guard: all candidates held or dex-only — skipping")
+        return _result("skipped", 0, reason="no_available_token")
 
     base = symbol
 
