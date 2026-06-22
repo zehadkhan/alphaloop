@@ -102,17 +102,54 @@ class TWAKExecutor:
             logger.warning("Could not fetch TWAK address: %s", exc)
         return self._address
 
+    async def _binance_spot_price(self, token_in: str, token_out: str = "USDT") -> float:
+        """Fallback spot price via Binance public API (token_in per 1 unit in token_out)."""
+        pair = f"{token_in.upper()}{token_out.upper()}"
+        async with httpx.AsyncClient(timeout=8) as client:
+            resp = await client.get(
+                "https://api.binance.com/api/v3/ticker/price",
+                params={"symbol": pair},
+            )
+        if resp.status_code != 200:
+            raise TWAKExecutorError(f"Binance price unavailable for {pair} (HTTP {resp.status_code})")
+        price = float(resp.json()["price"])
+        if price <= 0:
+            raise TWAKExecutorError(f"Binance returned invalid price for {pair}")
+        return price
+
     async def get_price(self, token_in: str, token_out: str) -> float:
-        """Return current price of token_in in token_out units via get_swap_quote."""
-        data = await self._call("get_swap_quote", {
-            "fromChain": _get_chain(),
-            "fromToken": token_in.upper(),
-            "toChain":   _get_chain(),
-            "toToken":   token_out.upper(),
-            "amount":    "1",
-        })
-        out = data.get("toAmount") or data.get("estimatedOutput") or "0"
-        return float(out)
+        """Return current price of token_in in token_out units.
+
+        Tries TWAK get_swap_quote first; falls back to Binance if TWAK fails or
+        returns zero (common when quote routing is unavailable).
+        """
+        token_in  = token_in.upper()
+        token_out = token_out.upper()
+        try:
+            data = await self._call("get_swap_quote", {
+                "fromChain": _get_chain(),
+                "fromToken": token_in,
+                "toChain":   _get_chain(),
+                "toToken":   token_out,
+                "amount":    "1",
+            })
+            out = data.get("toAmount") or data.get("estimatedOutput") or "0"
+            price = float(out)
+            if price > 0:
+                logger.info("Price %s/%s via TWAK: %.6f", token_in, token_out, price)
+                return price
+            logger.warning("TWAK quote returned 0 for %s/%s — trying Binance", token_in, token_out)
+        except Exception as exc:
+            logger.warning(
+                "TWAK get_swap_quote failed for %s/%s (%s) — trying Binance",
+                token_in, token_out, exc,
+            )
+
+        if token_out in ("USDT", "USDC", "BUSD"):
+            price = await self._binance_spot_price(token_in, token_out)
+            logger.info("Price %s/%s via Binance fallback: %.6f", token_in, token_out, price)
+            return price
+        raise TWAKExecutorError(f"Cannot price {token_in}/{token_out} — TWAK failed and no fallback")
 
     async def swap(self, token_in: str, token_out: str, amount_usd: float) -> dict:
         """Execute a swap on BSC via TWAK.
@@ -128,12 +165,14 @@ class TWAKExecutor:
         if token_in in ("USDT", "USDC", "BUSD"):
             amount_str = str(round(amount_usd, 6))
         else:
-            # Get price to convert USD → token
             try:
                 price = await self.get_price(token_in, "USDT")
                 token_amount = amount_usd / price if price else 0
-            except Exception:
-                token_amount = 0
+            except Exception as exc:
+                logger.error("Price lookup failed for %s: %s", token_in, exc)
+                raise TWAKExecutorError(
+                    f"Cannot determine {token_in} amount from ${amount_usd}: {exc}"
+                ) from exc
             if token_amount <= 0:
                 raise TWAKExecutorError(f"Cannot determine {token_in} amount from ${amount_usd}")
             amount_str = str(round(token_amount, 8))
