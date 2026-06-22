@@ -216,7 +216,9 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
             return _result("skipped", 0, reason="drawdown_halt",
                            drawdown_pct=dd_pre["drawdown_pct"])
 
-    # ── Smart compliance window (3-tier, replaces hard UTC-22) ────────────
+    # ── Smart compliance window — escalate when daily trade quota not met ──
+    # Competition requires ≥1 trade/day. Gates relax progressively through the day
+    # so we don't wait until 22 UTC (old bug: alert only fired for exactly hour 22).
     _force_execute    = False
     _compliance_mode  = "normal"
     if config.COMPETITION_MODE:
@@ -230,16 +232,30 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
                     "[Compliance] HARD window (hour=%d UTC) — forcing execution this cycle",
                     utc_hour,
                 )
-            elif utc_hour == 22:
+            elif utc_hour >= 20:
+                _force_execute   = True
                 _compliance_mode = "alert"
                 logger.warning(
-                    "[Compliance] ALERT window (hour=%d UTC) — relaxing confidence threshold",
+                    "[Compliance] ALERT+ window (hour=%d UTC) — forcing execution, bypassing backtest",
                     utc_hour,
                 )
-            elif utc_hour >= 18:
+            elif utc_hour >= 14:
+                _force_execute   = True
+                _compliance_mode = "alert"
+                logger.warning(
+                    "[Compliance] ALERT window (hour=%d UTC) — daily trade needed, bypassing backtest",
+                    utc_hour,
+                )
+            elif utc_hour >= 8:
+                _compliance_mode = "alert"
+                logger.warning(
+                    "[Compliance] ALERT window (hour=%d UTC) — overriding HOLD for daily trade quota",
+                    utc_hour,
+                )
+            else:
                 _compliance_mode = "soft"
                 logger.info(
-                    "[Compliance] SOFT window (hour=%d UTC) — hunting for a quality entry",
+                    "[Compliance] SOFT window (hour=%d UTC) — 0 trades today, lowered entry bar",
                     utc_hour,
                 )
 
@@ -366,12 +382,25 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
         )
 
         # ── 5. Gate: compliance mode + confidence ─────────────────────────
+        _hold_overridden = False
         if _compliance_mode == "hard" and strategy["action"] == "HOLD":
             strategy["action"] = "BUY"
+            _hold_overridden = True
             logger.warning("[Compliance] HARD: overriding HOLD → BUY")
         elif _compliance_mode == "alert" and strategy["action"] == "HOLD":
             strategy["action"] = "BUY"
+            _hold_overridden = True
             logger.warning("[Compliance] ALERT: overriding HOLD → BUY")
+
+        if _hold_overridden:
+            px = float(market_data.get("price", strategy.get("entry_price", 0)))
+            strategy["entry_price"] = round(px * 0.995, 4)
+            strategy["stop_loss"]   = round(strategy["entry_price"] * 0.96, 4)
+            strategy["take_profit"] = round(strategy["entry_price"] * 1.06, 4)
+            strategy["confidence"]  = max(strategy.get("confidence", 0.5), 0.55)
+            strategy["reasoning"]   = (
+                f"[Compliance override: daily trade quota] {strategy.get('reasoning', '')}"
+            )
 
         if strategy["action"] == "HOLD":
             logger.info("Action=HOLD — no trade this cycle")

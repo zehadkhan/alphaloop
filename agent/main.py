@@ -372,13 +372,24 @@ def _activity_item(run: AgentRun, strategies: list, trades: list) -> dict:
     if hold_strats:
         s = hold_strats[0]
         conf_pct = round(s.confidence * 100)
+        reasoning = s.reasoning or ""
+        if "compass" in reasoning.lower() or "defensive" in reasoning.lower():
+            detail = (
+                f"Market compass score too low for a safe entry "
+                f"(confidence {conf_pct}% — regime blocked BUY)"
+            )
+        else:
+            detail = (
+                f"Confidence {conf_pct}% — regime gates or market structure "
+                f"did not justify a trade this cycle"
+            )
         return {
             **base,
             "type": "hold",
             "color": "yellow",
             "title": f"AlphaLoop analyzed {s.symbol} and decided to wait — no clear signal yet",
-            "detail": f"Confidence only {conf_pct}% — needs to be higher before placing a trade",
-            "reasoning": s.reasoning[:500] if s.reasoning else None,
+            "detail": detail,
+            "reasoning": reasoning[:500] if reasoning else None,
             "symbol": s.symbol,
         }
 
