@@ -79,6 +79,20 @@ export default function Dashboard() {
     setNotifications((prev) => prev.filter((n) => n.id !== id));
   }, []);
 
+  const fetchTokenPrice = useCallback(async (symbol: string): Promise<number | null> => {
+    try {
+      const res = await fetch(
+        `https://api.binance.com/api/v3/ticker/price?symbol=${symbol.toUpperCase()}USDT`
+      );
+      if (!res.ok) return null;
+      const data = await res.json();
+      const price = parseFloat(data.price);
+      return Number.isFinite(price) ? price : null;
+    } catch {
+      return null;
+    }
+  }, []);
+
   const fetchAll = useCallback(async (silent = false) => {
     if (!silent) setRefreshing(true);
     try {
@@ -94,9 +108,27 @@ export default function Dashboard() {
         fetch("/api/proxy/twak").then((r) => r.json()),
       ]);
 
+      let tradesList: Trade[] = [];
+      if (t.status === "fulfilled") {
+        tradesList = (t.value as { trades: Trade[] }).trades ?? [];
+        setTrades(tradesList);
+      }
+
+      const open = tradesList.find(
+        (tr) =>
+          tr.action === "BUY" &&
+          tr.closed_at === null &&
+          (tr.status === "dry_run" || tr.status === "executed")
+      );
+      if (open?.symbol) {
+        const px = await fetchTokenPrice(open.symbol);
+        setPositionPrice(px);
+      } else {
+        setPositionPrice(null);
+      }
+
       if (h.status   === "fulfilled") setHealth(h.value as Health);
       if (s.status   === "fulfilled") setStatus(s.value as AgentStatus);
-      if (t.status   === "fulfilled") setTrades((t.value as { trades: Trade[] }).trades ?? []);
       if (st.status  === "fulfilled") setStrategies((st.value as { strategies: Strategy[] }).strategies ?? []);
       if (r.status   === "fulfilled") setRuns((r.value as { runs: AgentRun[] }).runs ?? []);
       if (comp.status === "fulfilled" && !(comp.value as { error?: string }).error)
@@ -112,7 +144,7 @@ export default function Dashboard() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [fetchTokenPrice]);
 
   const handleMonitor = useCallback(async () => {
     setMonitoring(true);
@@ -178,27 +210,17 @@ export default function Dashboard() {
 
   useEffect(() => {
     const sym = openTrade?.symbol;
-    if (!sym) {
-      setPositionPrice(null);
-      return;
-    }
-    const pair = `${sym.toUpperCase()}USDT`;
-    const load = () => {
-      fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${pair}`)
-        .then((r) => r.json())
-        .then((d) => setPositionPrice(parseFloat(d.price)))
-        .catch(() => {});
-    };
-    load();
-    const id = setInterval(load, 5_000);
+    if (!sym) return;
+    const id = setInterval(() => {
+      fetchTokenPrice(sym).then((px) => {
+        if (px != null) setPositionPrice(px);
+      });
+    }, 5_000);
     return () => clearInterval(id);
-  }, [openTrade?.symbol]);
+  }, [openTrade?.symbol, fetchTokenPrice]);
 
-  // Mark price for open-position PnL — must match trade symbol, not always BNB
-  const markPrice =
-    openTrade && positionPrice != null
-      ? positionPrice
-      : health?.bnb_price ?? null;
+  // Never fall back to BNB when an open position exists — causes a 1-frame PnL flash
+  const markPrice = openTrade ? positionPrice : (health?.bnb_price ?? null);
   const markPair = openTrade
     ? `${openTrade.symbol}/USDT`
     : status?.trading_pair ?? "BNB/USDT";
