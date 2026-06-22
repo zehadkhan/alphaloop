@@ -150,7 +150,7 @@ async def run_agent_cycle() -> dict:
 
 async def _run_cycle_impl() -> dict:  # noqa: C901
     global _last_compass
-    quote = "USDT"
+    quote = "BNB"
 
     # ── Read runtime admin config overrides ───────────────────────────────
     bot_cfg   = await get_bot_config()
