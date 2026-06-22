@@ -223,7 +223,7 @@ export default function Dashboard() {
   const markPrice = openTrade ? positionPrice : (health?.bnb_price ?? null);
   const markPair = openTrade
     ? `${openTrade.symbol}/USDT`
-    : status?.trading_pair ?? "BNB/USDT";
+    : "BNB/USDT";
 
   if (loading) {
     return (
