@@ -8,6 +8,8 @@ export type Trade = {
   exit_price: number | null;
   pnl_usd: number | null;
   pnl_percent: number | null;
+  close_reason: "TP" | "SL" | "timeout" | "manual" | null;
+  duration_hours: number | null;
   tx_hash: string | null;
   status: "pending" | "executed" | "dry_run" | "failed";
   executed_at: string | null;
@@ -132,16 +134,47 @@ export type RunResult = {
 
 export type TokenScanToken = {
   symbol: string;
+  rank: number;
   score: number;
-  change_24h: number;
-  volume_usdt: number;
-  rsi: number;
-  price: number;
+  change_1h: number | null;
+  change_4h: number | null;
+  change_24h: number | null;
+  volume_usdt: number | null;
+  volume_spike: number | null;
+  rsi_1h: number | null;
+  rsi?: number;    // legacy compat
+  price: number | null;
+  sma20_distance: number | null;
+  data_source: string | null;
+  scanned_at?: string | null;
 };
 
 export type TokenScanResult = {
   top_tokens: TokenScanToken[];
   scanned: number;
+};
+
+export type TradeStats = {
+  total_trades: number;
+  win_count: number;
+  loss_count: number;
+  win_rate_pct: number;
+  avg_profit_usd: number;
+  avg_hold_hours: number;
+  best_trade_pct: number;
+  worst_trade_pct: number;
+  total_realized_pnl: number;
+};
+
+export type PerformancePoint = {
+  time: string;
+  portfolio_value: number;
+  realized_pnl: number;
+  unrealized_pnl: number;
+  open_positions: number;
+  total_trades: number;
+  win_count: number;
+  loss_count: number;
 };
 
 export type TwakStatus = {

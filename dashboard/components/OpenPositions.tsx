@@ -1,6 +1,7 @@
 "use client";
 
-import { TrendingUp, TrendingDown, Clock } from "lucide-react";
+import { useState, useCallback } from "react";
+import { TrendingUp, TrendingDown, Clock, X, AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { timeAgo } from "@/lib/utils";
 import type { Trade, Strategy } from "@/types";
@@ -9,6 +10,7 @@ type Props = {
   trades: Trade[];
   strategies: Strategy[];
   currentPrice: number | null;
+  onRefresh?: () => void;
 };
 
 function pctColor(pct: number) {
@@ -17,8 +19,24 @@ function pctColor(pct: number) {
   return "text-text-secondary";
 }
 
-export default function OpenPositions({ trades, strategies, currentPrice }: Props) {
+export default function OpenPositions({ trades, strategies, currentPrice, onRefresh }: Props) {
+  const [closingId, setClosingId] = useState<number | null>(null);
   const strategyMap = new Map(strategies.map((s) => [s.id, s]));
+
+  const handleClose = useCallback(async (tradeId: number) => {
+    if (!confirm(`Close trade #${tradeId} at market price?`)) return;
+    setClosingId(tradeId);
+    try {
+      const res = await fetch(`/api/proxy/admin/close/${tradeId}`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Close failed");
+      onRefresh?.();
+    } catch (err) {
+      alert(String(err));
+    } finally {
+      setClosingId(null);
+    }
+  }, [onRefresh]);
 
   const open = trades.filter(
     (t) => t.action === "BUY" && t.closed_at === null && (t.status === "dry_run" || t.status === "executed")
@@ -61,14 +79,26 @@ export default function OpenPositions({ trades, strategies, currentPrice }: Prop
             const tpDistPct = tp ? ((tp - entry) / entry) * 100 : null;
             const slDistPct = sl ? ((sl - entry) / entry) * 100 : null;
 
+            // Time until 4h auto-close
+            const autoCloseIn = trade.executed_at
+              ? Math.max(0, 4 * 3600 - (Date.now() - new Date(trade.executed_at).getTime()) / 1000)
+              : null;
+            const autoCloseHrs = autoCloseIn != null ? Math.floor(autoCloseIn / 3600) : null;
+            const autoCloseMins = autoCloseIn != null ? Math.floor((autoCloseIn % 3600) / 60) : null;
+            const nearTimeout = autoCloseIn != null && autoCloseIn < 1800; // < 30 min
+
             return (
               <div key={trade.id} className="px-4 py-3 hover:bg-surface-2 transition-colors">
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
                       <span className="text-xs font-bold text-text-primary">{trade.symbol}</span>
-                      <span className="text-[10px] font-medium text-profit bg-profit/10 px-1.5 py-0.5 rounded">
-                        BUY
+                      <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
+                        trade.action === "BUY"
+                          ? "text-profit bg-profit/10"
+                          : "text-loss bg-loss/10"
+                      }`}>
+                        {trade.action}
                       </span>
                       <span className="text-[10px] text-text-muted">#{trade.id}</span>
                     </div>
@@ -77,7 +107,7 @@ export default function OpenPositions({ trades, strategies, currentPrice }: Prop
                       <div>
                         <span className="text-text-muted">Entry</span>
                         <span className="ml-1 tabular-nums text-text-secondary">
-                          ${entry.toFixed(2)}
+                          ${entry.toFixed(4)}
                         </span>
                       </div>
                       {tp && (
@@ -85,10 +115,7 @@ export default function OpenPositions({ trades, strategies, currentPrice }: Prop
                           <TrendingUp size={9} className="inline text-profit mr-0.5" />
                           <span className="text-text-muted">TP</span>
                           <span className="ml-1 tabular-nums text-profit">
-                            ${tp.toFixed(2)}
-                            {tpDistPct != null && (
-                              <span className="text-[10px] opacity-70"> +{tpDistPct.toFixed(1)}%</span>
-                            )}
+                            {tpDistPct != null ? `+${tpDistPct.toFixed(1)}%` : `$${tp.toFixed(4)}`}
                           </span>
                         </div>
                       )}
@@ -97,28 +124,43 @@ export default function OpenPositions({ trades, strategies, currentPrice }: Prop
                           <TrendingDown size={9} className="inline text-loss mr-0.5" />
                           <span className="text-text-muted">SL</span>
                           <span className="ml-1 tabular-nums text-loss">
-                            ${sl.toFixed(2)}
-                            {slDistPct != null && (
-                              <span className="text-[10px] opacity-70"> {slDistPct.toFixed(1)}%</span>
-                            )}
+                            {slDistPct != null ? `${slDistPct.toFixed(1)}%` : `$${sl.toFixed(4)}`}
                           </span>
                         </div>
                       )}
                     </div>
+
+                    {/* Auto-close countdown */}
+                    {autoCloseIn != null && (
+                      <div className={`flex items-center gap-1 mt-1 text-[10px] ${nearTimeout ? "text-amber-400" : "text-text-muted/60"}`}>
+                        {nearTimeout && <AlertTriangle size={8} />}
+                        <span>
+                          Auto-close in {autoCloseHrs}h {autoCloseMins}m
+                        </span>
+                      </div>
+                    )}
                   </div>
 
-                  <div className="text-right shrink-0">
+                  <div className="flex flex-col items-end gap-1 shrink-0">
                     {unrealizedPct != null && (
                       <p className={`text-sm font-bold tabular-nums ${pctColor(unrealizedPct)}`}>
                         {unrealizedPct > 0 ? "+" : ""}{unrealizedPct.toFixed(2)}%
                       </p>
                     )}
-                    <div className="flex items-center gap-1 justify-end mt-0.5">
+                    <div className="flex items-center gap-1 justify-end">
                       <Clock size={9} className="text-text-muted" />
                       <span className="text-[10px] text-text-muted">
                         {trade.executed_at ? timeAgo(trade.executed_at) : "—"}
                       </span>
                     </div>
+                    <button
+                      onClick={() => handleClose(trade.id)}
+                      disabled={closingId === trade.id}
+                      className="flex items-center gap-0.5 text-[9px] text-loss/70 hover:text-loss border border-loss/20 hover:border-loss/50 px-1.5 py-0.5 rounded transition-colors disabled:opacity-40"
+                    >
+                      <X size={8} />
+                      {closingId === trade.id ? "Closing…" : "Close"}
+                    </button>
                   </div>
                 </div>
               </div>

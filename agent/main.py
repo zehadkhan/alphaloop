@@ -48,6 +48,11 @@ from db.models import (
     list_open_buy_trades,
     get_bot_config,
     update_bot_config,
+    get_latest_token_scans,
+    get_performance_history,
+    get_trade_stats,
+    get_trade,
+    close_trade,
 )
 
 # ---------------------------------------------------------------------------
@@ -165,20 +170,27 @@ def _strategy_dict(s: Strategy) -> dict:
 
 
 def _trade_dict(t: Trade) -> dict:
+    duration_hours = None
+    if t.executed_at and t.closed_at:
+        ea = t.executed_at if t.executed_at.tzinfo else t.executed_at.replace(tzinfo=timezone.utc)
+        ca = t.closed_at  if t.closed_at.tzinfo  else t.closed_at.replace(tzinfo=timezone.utc)
+        duration_hours = round((ca - ea).total_seconds() / 3600, 2)
     return {
-        "id":           t.id,
-        "strategy_id":  t.strategy_id,
-        "symbol":       t.symbol,
-        "action":       t.action,
-        "amount_usd":   t.amount_usd,
-        "entry_price":  t.entry_price,
-        "exit_price":   t.exit_price,
-        "pnl_usd":      t.pnl_usd,
-        "pnl_percent":  t.pnl_percent,
-        "tx_hash":      t.tx_hash,
-        "status":       t.status,
-        "executed_at":  _fmt_dt(t.executed_at),
-        "closed_at":    _fmt_dt(t.closed_at),
+        "id":             t.id,
+        "strategy_id":    t.strategy_id,
+        "symbol":         t.symbol,
+        "action":         t.action,
+        "amount_usd":     t.amount_usd,
+        "entry_price":    t.entry_price,
+        "exit_price":     t.exit_price,
+        "pnl_usd":        t.pnl_usd,
+        "pnl_percent":    t.pnl_percent,
+        "close_reason":   getattr(t, "close_reason", None),
+        "duration_hours": duration_hours,
+        "tx_hash":        t.tx_hash,
+        "status":         t.status,
+        "executed_at":    _fmt_dt(t.executed_at),
+        "closed_at":      _fmt_dt(t.closed_at),
     }
 
 
@@ -593,6 +605,67 @@ async def admin_close_all(x_admin_password: str = Header(default="")) -> dict:
             errors.append(f"trade {trade.id}: {exc}")
 
     return {"closed": closed, "total": len(open_trades), "errors": errors}
+
+
+@app.post("/competition/scan", tags=["competition"])
+async def competition_scan() -> dict:
+    """Run the full 149-token scanner and return ranked results."""
+    from data.token_scanner import TokenScanner
+    from db.models import save_token_scans as _save_scans
+    try:
+        scanner = TokenScanner(config.ELIGIBLE_TOKENS)
+        results = await scanner.scan(top_n=10)
+        try:
+            await _save_scans(None, results)
+        except Exception:
+            pass
+        return {
+            "scanned":    scanner.token_count,
+            "top_tokens": results,
+        }
+    except Exception as exc:
+        return JSONResponse(content={"error": str(exc)}, status_code=500)
+
+
+@app.get("/scanner/latest", tags=["data"])
+async def scanner_latest() -> dict:
+    """Return the most recent token scanner cycle results."""
+    rows = await get_latest_token_scans(limit=150)
+    return {"count": len(rows), "tokens": rows}
+
+
+@app.get("/performance", tags=["data"])
+async def get_performance() -> dict:
+    """Return equity curve data (hourly snapshots, last 7 days)."""
+    history = await get_performance_history(limit=168)
+    return {"count": len(history), "history": history}
+
+
+@app.get("/stats", tags=["data"])
+async def get_stats() -> dict:
+    """Return aggregate trading statistics: win rate, avg profit, best/worst trade."""
+    stats = await get_trade_stats()
+    return stats
+
+
+@app.post("/admin/close/{trade_id}", tags=["admin"])
+async def admin_close_trade(trade_id: int, x_admin_password: str = Header(default="")) -> dict:
+    """Close a specific open trade by ID at current market price."""
+    _check_admin_password(x_admin_password)
+    from agent.scheduler import _get_token_price
+    trade = await get_trade(trade_id)
+    if trade is None:
+        raise HTTPException(status_code=404, detail=f"Trade {trade_id} not found")
+    if trade.closed_at is not None:
+        raise HTTPException(status_code=400, detail="Trade already closed")
+    price = await _get_token_price(trade.symbol)
+    if price is None:
+        raise HTTPException(status_code=503, detail=f"Cannot fetch price for {trade.symbol}")
+    await close_trade(trade_id, exit_price=round(price, 4), close_reason="manual")
+    pnl_pct = (price / trade.entry_price - 1) * 100
+    logger.info("Admin closed trade %d  %s  pnl=%+.2f%%", trade_id, trade.symbol, pnl_pct)
+    return {"trade_id": trade_id, "symbol": trade.symbol, "exit_price": price,
+            "pnl_pct": round(pnl_pct, 3), "close_reason": "manual"}
 
 
 @app.get("/competition/status", tags=["competition"])

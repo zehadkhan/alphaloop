@@ -1,72 +1,69 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import { Zap, RefreshCw, TrendingUp, TrendingDown } from "lucide-react";
+import { useState, useCallback, useEffect } from "react";
+import { Zap, RefreshCw, TrendingUp, TrendingDown, Database } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import type { TokenScanToken } from "@/types";
+
+type ScanToken = {
+  symbol: string;
+  rank: number;
+  score: number;
+  change_1h: number | null;
+  change_4h: number | null;
+  change_24h: number | null;
+  volume_usdt: number | null;
+  volume_spike: number | null;
+  rsi_1h: number | null;
+  price: number | null;
+  sma20_distance: number | null;
+  data_source: string | null;
+  scanned_at?: string | null;
+};
 
 function ScoreBar({ score }: { score: number }) {
   const pct   = Math.round(score * 100);
-  const color = score >= 0.65 ? "bg-profit" : score >= 0.4 ? "bg-amber-400" : "bg-loss";
+  const color = score >= 0.65 ? "bg-profit" : score >= 0.40 ? "bg-amber-400" : "bg-loss";
   return (
-    <div className="w-full h-0.5 rounded-full bg-white/5 overflow-hidden mt-1">
-      <div
-        className={cn("h-full rounded-full transition-all duration-500", color)}
-        style={{ width: `${pct}%` }}
-      />
+    <div className="w-full h-0.5 rounded-full bg-white/5 overflow-hidden mt-0.5">
+      <div className={cn("h-full rounded-full transition-all duration-500", color)} style={{ width: `${pct}%` }} />
     </div>
   );
 }
 
-function TokenRow({ token, rank }: { token: TokenScanToken; rank: number }) {
-  const changePos  = token.change_24h >= 0;
-  const rankColors = ["text-profit", "text-accent", "text-text-muted"];
-
-  return (
-    <div className="flex items-center gap-3 py-2.5 border-b border-border-subtle/50 last:border-0">
-      {/* Rank */}
-      <span className={cn("text-[11px] font-bold tabular-nums w-3 shrink-0", rankColors[rank] ?? "text-text-muted")}>
-        #{rank + 1}
-      </span>
-
-      {/* Symbol + score bar */}
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center justify-between mb-0.5">
-          <span className="text-[13px] font-bold text-text-primary">{token.symbol}</span>
-          <span className="text-[10px] font-mono text-text-muted tabular-nums">
-            {(token.score * 100).toFixed(0)}
-            <span className="text-text-muted/60">pts</span>
-          </span>
-        </div>
-        <ScoreBar score={token.score} />
-      </div>
-
-      {/* Stats */}
-      <div className="flex flex-col items-end gap-0.5 shrink-0">
-        <span className={cn("text-[11px] font-semibold tabular-nums flex items-center gap-0.5",
-          changePos ? "text-profit" : "text-loss")}>
-          {changePos ? <TrendingUp size={9} /> : <TrendingDown size={9} />}
-          {changePos ? "+" : ""}{token.change_24h.toFixed(1)}%
-        </span>
-        <span className="text-[9px] text-text-muted tabular-nums">
-          RSI {token.rsi.toFixed(0)}
-        </span>
-      </div>
-    </div>
-  );
+function fmt1h(v: number | null) {
+  if (v == null) return "—";
+  const pos = v >= 0;
+  return <span className={pos ? "text-profit" : "text-loss"}>{pos ? "+" : ""}{v.toFixed(1)}%</span>;
 }
 
-type Props = {
-  competitionMode?: boolean;
-};
+function fmtSpike(v: number | null) {
+  if (v == null) return "—";
+  const hot = v >= 2;
+  return <span className={hot ? "text-amber-400" : "text-text-muted"}>{v.toFixed(1)}×</span>;
+}
 
-export default function TokenScannerPanel({ competitionMode = false }: Props) {
-  const [tokens, setTokens]     = useState<TokenScanToken[]>([]);
+export default function TokenScannerPanel({ competitionMode = false }: { competitionMode?: boolean }) {
+  const [tokens, setTokens]     = useState<ScanToken[]>([]);
   const [scanned, setScanned]   = useState<number>(0);
   const [loading, setLoading]   = useState(false);
   const [lastScan, setLastScan] = useState<Date | null>(null);
   const [error, setError]       = useState<string | null>(null);
+  const [showAll, setShowAll]   = useState(false);
+
+  // Auto-load cached scan results on mount
+  useEffect(() => {
+    fetch("/api/proxy/scanner/latest")
+      .then(r => r.json())
+      .then(data => {
+        if (data.tokens?.length) {
+          setTokens(data.tokens);
+          setScanned(data.count);
+          if (data.tokens[0]?.scanned_at) setLastScan(new Date(data.tokens[0].scanned_at));
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const runScan = useCallback(async () => {
     setLoading(true);
@@ -85,9 +82,8 @@ export default function TokenScannerPanel({ competitionMode = false }: Props) {
     }
   }, []);
 
-  const ago = lastScan
-    ? Math.round((Date.now() - lastScan.getTime()) / 1000)
-    : null;
+  const ago = lastScan ? Math.round((Date.now() - lastScan.getTime()) / 1000) : null;
+  const visible = showAll ? tokens : tokens.slice(0, 10);
 
   return (
     <Card>
@@ -96,49 +92,90 @@ export default function TokenScannerPanel({ competitionMode = false }: Props) {
           <CardTitle className="flex items-center gap-1.5">
             <Zap size={12} className="text-accent" />
             Token Scanner
+            {scanned > 0 && (
+              <span className="text-[9px] text-text-muted font-normal ml-1">
+                {scanned} scanned
+              </span>
+            )}
           </CardTitle>
-          <button
-            onClick={runScan}
-            disabled={loading}
-            className="flex items-center gap-1 text-[10px] text-text-muted hover:text-text-primary transition-colors disabled:opacity-40"
-          >
-            <RefreshCw size={10} className={loading ? "animate-spin" : ""} />
-            {loading ? "Scanning…" : "Scan Now"}
-          </button>
+          <div className="flex items-center gap-2">
+            {tokens.length > 10 && (
+              <button
+                onClick={() => setShowAll(s => !s)}
+                className="text-[9px] text-text-muted hover:text-text-primary transition-colors"
+              >
+                {showAll ? "Top 10" : `All ${tokens.length}`}
+              </button>
+            )}
+            <button
+              onClick={runScan}
+              disabled={loading}
+              className="flex items-center gap-1 text-[10px] text-text-muted hover:text-text-primary transition-colors disabled:opacity-40"
+            >
+              <RefreshCw size={10} className={loading ? "animate-spin" : ""} />
+              {loading ? "Scanning…" : "Scan"}
+            </button>
+          </div>
         </div>
       </CardHeader>
 
       <CardContent className="pt-0">
         {tokens.length === 0 ? (
           <div className="py-5 text-center">
-            <p className="text-[11px] text-text-muted leading-relaxed">
-              {loading
-                ? "Fetching momentum scores from Binance…"
-                : "Click Scan Now to rank eligible tokens by momentum."}
+            <p className="text-[11px] text-text-muted">
+              {loading ? "Scanning 149 competition tokens…" : "Click Scan to rank tokens by momentum."}
             </p>
-            {!loading && (
-              <p className="text-[10px] text-text-muted/60 mt-1">
-                {scanned > 0 ? `${scanned} tokens eligible` : `${competitionMode ? "Competition mode active" : "30 tokens eligible"}`}
-              </p>
-            )}
           </div>
         ) : (
           <>
-            <div className="mb-1">
-              {tokens.map((t, i) => (
-                <TokenRow key={t.symbol} token={t} rank={i} />
-              ))}
+            {/* Header row */}
+            <div className="grid grid-cols-[16px_1fr_36px_36px_36px_36px] gap-x-2 px-1 mb-1 text-[9px] text-text-muted/60 uppercase tracking-wide">
+              <span>#</span>
+              <span>Token</span>
+              <span className="text-right">1h</span>
+              <span className="text-right">Spike</span>
+              <span className="text-right">RSI</span>
+              <span className="text-right">Pts</span>
             </div>
-            <p className="text-[9px] text-text-muted/60 mt-1">
-              Top {tokens.length} of {scanned} eligible · scored by RSI + momentum + volume
+
+            <div className="space-y-0">
+              {visible.map((t) => {
+                const rankColor = t.rank === 1 ? "text-profit" : t.rank === 2 ? "text-accent" : t.rank === 3 ? "text-amber-400" : "text-text-muted/60";
+                return (
+                  <div key={t.symbol} className="grid grid-cols-[16px_1fr_36px_36px_36px_36px] gap-x-2 items-center py-1.5 border-b border-border-subtle/30 last:border-0 px-1">
+                    <span className={cn("text-[10px] font-bold tabular-nums", rankColor)}>
+                      {t.rank}
+                    </span>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1">
+                        <span className="text-[12px] font-bold text-text-primary">{t.symbol}</span>
+                        {t.data_source === "dexscreener" && (
+                          <Database size={7} className="text-text-muted/50 shrink-0" />
+                        )}
+                      </div>
+                      <ScoreBar score={t.score} />
+                    </div>
+                    <span className="text-[10px] tabular-nums text-right">{fmt1h(t.change_1h)}</span>
+                    <span className="text-[10px] tabular-nums text-right">{fmtSpike(t.volume_spike)}</span>
+                    <span className="text-[10px] tabular-nums text-right text-text-muted">
+                      {t.rsi_1h != null ? t.rsi_1h.toFixed(0) : "—"}
+                    </span>
+                    <span className="text-[10px] font-mono tabular-nums text-right text-text-muted">
+                      {(t.score * 100).toFixed(0)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            <p className="text-[9px] text-text-muted/50 mt-2">
+              Score: 1h(30%) + 4h(20%) + spike(25%) + RSI(15%) + SMA(10%)
               {ago != null && ` · ${ago < 60 ? `${ago}s` : `${Math.round(ago / 60)}m`} ago`}
             </p>
           </>
         )}
 
-        {error && (
-          <p className="text-[10px] text-loss mt-2 leading-snug">{error}</p>
-        )}
+        {error && <p className="text-[10px] text-loss mt-2">{error}</p>}
       </CardContent>
     </Card>
   );

@@ -20,8 +20,8 @@ class Config:
         "DRY_RUN",
         "true" if os.getenv("ENVIRONMENT", "testnet") == "testnet" else "false",
     ).lower() == "true"
-    MIN_CONFIDENCE: float = float(os.getenv("MIN_CONFIDENCE", "0.6"))
-    CYCLE_INTERVAL_MINUTES: int = int(os.getenv("CYCLE_INTERVAL_MINUTES", "30"))
+    MIN_CONFIDENCE: float = float(os.getenv("MIN_CONFIDENCE", "0.45"))
+    CYCLE_INTERVAL_MINUTES: int = int(os.getenv("CYCLE_INTERVAL_MINUTES", "15"))
     MAX_DAILY_LOSS_USD: float = float(os.getenv("MAX_DAILY_LOSS_USD", "50"))
 
     # Token scanner
@@ -65,13 +65,23 @@ class Config:
     COMPETITION_MODE: bool = os.getenv("COMPETITION_MODE", "false").lower() == "true"
     INITIAL_PORTFOLIO_USD: float = float(os.getenv("INITIAL_PORTFOLIO_USD", "1000"))
     MAX_DRAWDOWN_PCT: float = float(os.getenv("MAX_DRAWDOWN_PCT", "25"))        # halt at 25%, DQ at 30%
-    MAX_POSITION_HOLD_HOURS: float = float(os.getenv("MAX_POSITION_HOLD_HOURS", "20"))  # force-close stale
+    MAX_POSITION_HOLD_HOURS: float = float(os.getenv("MAX_POSITION_HOLD_HOURS", "4"))  # auto-close after 4h
 
-    # Edge-Verified Adaptive Trading — new knobs
+    # Multi-position scalping
+    MAX_CONCURRENT_POSITIONS: int = int(os.getenv("MAX_CONCURRENT_POSITIONS", "3"))
+    SCALPING_MODE: bool = os.getenv("SCALPING_MODE", "true").lower() == "true"
+
+    # Minimum volume spike to consider a trade (scanner filter)
+    MIN_VOLUME_SPIKE: float = float(os.getenv("MIN_VOLUME_SPIKE", "1.5"))
+
+    # Edge-Verified Adaptive Trading
     # Hysteresis margin: a new token must beat the held token's score by this much to displace it
-    HYSTERESIS_MARGIN: float = float(os.getenv("HYSTERESIS_MARGIN", "0.15"))
+    HYSTERESIS_MARGIN: float = float(os.getenv("HYSTERESIS_MARGIN", "0.10"))
     # Round-trip cost estimate: TWAK fee ~0.5% + slippage ~0.3% = 0.8%
     ROUND_TRIP_COST_PCT: float = float(os.getenv("ROUND_TRIP_COST_PCT", "0.008"))
+
+    # Performance snapshot interval
+    SNAPSHOT_INTERVAL_MINUTES: int = int(os.getenv("SNAPSHOT_INTERVAL_MINUTES", "60"))
 
     @property
     def is_testnet(self) -> bool:

@@ -43,7 +43,9 @@ Analyze the following market data for {pair} and produce a trading strategy.
 - SMA 20             : {sma_20:.4f}
 - SMA 50             : {sma_50:.4f}
 
-## Technical Indicators — 4h (entry timing){indicators_4h_section}
+## Technical Indicators — 1h/4h (scalping entry timing){indicators_4h_section}
+
+## Token Scanner Context{scanner_section}
 
 ## 5-Axis Market Compass (AlphaLoop regime engine){compass_section}
 
@@ -63,24 +65,29 @@ Respond with a single JSON object that strictly matches this schema — no markd
   "risk_level": "low" | "medium" | "high"
 }}
 
-Critical pricing rules — all values must be absolute prices (not percentages):
+SCALPING MODE — small, fast trades. All prices must be absolute (not percentages).
 
 For BUY action (current price ≈ {price:.2f}):
-  entry_price  = 0.5–1.5% BELOW current price  (limit buy on a small pullback)
-  stop_loss    = 3–5% BELOW entry_price         (must be strictly less than entry)
-  take_profit  = 5–10% ABOVE entry_price        (must be strictly greater than entry)
+  entry_price  = 0–0.3% BELOW current price    (near-market entry, no large pullback wait)
+  stop_loss    = 0.8–1.2% BELOW entry_price    (tight stop — must be strictly less than entry)
+  take_profit  = 1.5–2.5% ABOVE entry_price   (quick profit target — must be strictly greater than entry)
   Example: price={price:.2f} → entry≈{buy_entry:.2f}, sl≈{buy_sl:.2f}, tp≈{buy_tp:.2f}
 
 For SELL action (current price ≈ {price:.2f}):
-  entry_price  = 0.5–1.5% ABOVE current price  (limit sell on a small rally)
-  stop_loss    = 3–5% ABOVE entry_price         (must be strictly greater than entry)
-  take_profit  = 5–10% BELOW entry_price        (must be strictly less than entry)
+  entry_price  = 0–0.3% ABOVE current price    (near-market entry)
+  stop_loss    = 0.8–1.2% ABOVE entry_price   (tight stop — must be strictly greater than entry)
+  take_profit  = 1.5–2.5% BELOW entry_price   (quick profit target — must be strictly less than entry)
   Example: price={price:.2f} → entry≈{sell_entry:.2f}, sl≈{sell_sl:.2f}, tp≈{sell_tp:.2f}
 
 For HOLD action: entry_price, stop_loss, take_profit = current price (placeholder only).
-Risk/reward must be ≥ 1.5 (tp_distance / sl_distance ≥ 1.5).
-Use the 4h trend and RSI to refine entry timing: prefer BUY when 4h is oversold/bullish,
-prefer SELL when 4h is overbought/bearish. Raise confidence when daily and 4h signals align.
+
+Signal requirements — you MUST see at least 2 of these confirming signals before BUY/SELL:
+  BUY: RSI 1h between 40–65 (not overbought), price above SMA20, volume spike ≥ 1.5×, positive 1h momentum
+  SELL: RSI 1h between 35–60 (not oversold), price below SMA20, volume spike ≥ 1.5×, negative 1h momentum
+  If fewer than 2 signals align → HOLD.
+
+R/R must be ≥ 1.5 (tp_distance / sl_distance ≥ 1.5).
+Low-cap tokens moving on volume spikes are preferred over slow large-caps.
 """
 
 _REQUIRED_FIELDS: dict[str, type | tuple[type, ...]] = {
@@ -97,7 +104,7 @@ _VALID_ACTIONS     = {"BUY", "SELL", "HOLD"}
 _VALID_TIMEFRAMES  = {"short", "medium"}
 _VALID_RISK_LEVELS = {"low", "medium", "high"}
 
-CONFIDENCE_THRESHOLD = 0.6
+CONFIDENCE_THRESHOLD = 0.45
 
 
 class StrategyGeneratorError(Exception):
@@ -130,6 +137,7 @@ class StrategyGenerator:
         indicators_4h: dict | None = None,
         extra_instruction: str | None = None,
         compass: dict | None = None,
+        scanner_data: dict | None = None,
     ) -> dict:
         """Call Claude and return a validated strategy dict.
 
@@ -138,7 +146,7 @@ class StrategyGenerator:
             action != HOLD and confidence >= CONFIDENCE_THRESHOLD.
         """
         pair   = market_data.get("symbol", symbol) + "/USDT"
-        prompt = self._build_prompt(pair, market_data, indicators, indicators_4h, extra_instruction, compass)
+        prompt = self._build_prompt(pair, market_data, indicators, indicators_4h, extra_instruction, compass, scanner_data)
         raw    = await self._call_claude(prompt)
         strategy = self._parse_and_validate(raw)
         strategy["should_execute"] = (
@@ -168,6 +176,7 @@ class StrategyGenerator:
         indicators_4h: dict | None = None,
         extra_instruction: str | None = None,
         compass: dict | None = None,
+        scanner_data: dict | None = None,
     ) -> str:
         price = market_data.get("price", 0.0)
 
@@ -183,13 +192,13 @@ class StrategyGenerator:
         if abs(change_24h) > 5:
             conditions += f", high 24 h volatility ({change_24h:+.1f}%)"
 
-        # Pre-compute example price levels so the prompt shows concrete numbers.
-        buy_entry = price * 0.99
-        buy_sl    = buy_entry * 0.96
-        buy_tp    = buy_entry * 1.07
-        sell_entry = price * 1.01
-        sell_sl    = sell_entry * 1.04
-        sell_tp    = sell_entry * 0.93
+        # Pre-compute scalping example price levels.
+        buy_entry  = price * 0.999
+        buy_sl     = buy_entry * 0.990
+        buy_tp     = buy_entry * 1.020
+        sell_entry = price * 1.001
+        sell_sl    = sell_entry * 1.010
+        sell_tp    = sell_entry * 0.980
 
         # Build compass section if available
         if compass:
@@ -207,6 +216,19 @@ class StrategyGenerator:
             )
         else:
             compass_section = "\n- (not available this cycle)"
+
+        # Build scanner section
+        if scanner_data:
+            scanner_section = (
+                f"\n- 1h change         : {scanner_data.get('change_1h', 0):+.2f}%"
+                f"\n- 4h change         : {scanner_data.get('change_4h', 0):+.2f}%"
+                f"\n- Volume spike      : {scanner_data.get('volume_spike', 1.0):.2f}× avg hourly"
+                f"\n- RSI (1h)          : {scanner_data.get('rsi_1h', 50.0):.1f}"
+                f"\n- SMA20 distance    : {scanner_data.get('sma20_distance', 0):+.2f}%"
+                f"\n- Scanner score     : {scanner_data.get('score', 0):.3f}  rank #{scanner_data.get('rank', '?')}"
+            )
+        else:
+            scanner_section = "\n- (scanner data not available this cycle)"
 
         # Build 4h section string if data is available
         if indicators_4h:
@@ -243,6 +265,7 @@ class StrategyGenerator:
             sell_sl=sell_sl,
             sell_tp=sell_tp,
             indicators_4h_section=indicators_4h_section,
+            scanner_section=scanner_section,
             compass_section=compass_section,
         )
         if extra_instruction:

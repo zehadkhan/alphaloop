@@ -41,7 +41,7 @@ export default function TradeHistory({ trades }: Props) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border-subtle">
-                  {["#", "Symbol", "Action", "Entry", "Exit", "PnL %", "Amount", "Status", "Time"].map(
+                  {["#", "Symbol", "Action", "Entry", "Exit", "PnL %", "Dur.", "Reason", "Status", "Time"].map(
                     (h) => (
                       <th
                         key={h}
@@ -95,8 +95,24 @@ export default function TradeHistory({ trades }: Props) {
                       <td className="px-4 py-3 whitespace-nowrap">
                         <PnlCell pnl={trade.pnl_percent} />
                       </td>
-                      <td className="px-4 py-3 tabular-nums text-text-secondary whitespace-nowrap">
-                        ${trade.amount_usd.toFixed(2)}
+                      <td className="px-4 py-3 tabular-nums text-text-muted whitespace-nowrap text-[11px]">
+                        {(trade as any).duration_hours != null
+                          ? `${((trade as any).duration_hours as number).toFixed(1)}h`
+                          : "—"}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        {(trade as any).close_reason ? (
+                          <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
+                            (trade as any).close_reason === "TP" ? "bg-profit/10 text-profit" :
+                            (trade as any).close_reason === "SL" ? "bg-loss/10 text-loss" :
+                            (trade as any).close_reason === "timeout" ? "bg-amber-400/10 text-amber-400" :
+                            "bg-white/5 text-text-muted"
+                          }`}>
+                            {(trade as any).close_reason}
+                          </span>
+                        ) : (
+                          <span className="text-text-muted text-[11px]">—</span>
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         <Badge

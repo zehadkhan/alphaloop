@@ -36,10 +36,14 @@ from db.models import (
     close_trade,
     update_trade_proof,
     list_open_buy_trades,
+    list_open_trades,
     get_today_pnl,
     get_daily_trade_count,
     get_last_trade_time,
     get_bot_config,
+    save_token_scans,
+    save_performance_snapshot,
+    get_trade_stats,
 )
 
 logger = logging.getLogger(__name__)
@@ -82,7 +86,7 @@ async def _get_bnb_price() -> float | None:
 
 
 async def monitor_open_trades() -> dict:
-    """Check every open BUY position against its TP/SL and close if triggered."""
+    """Check every open position against TP/SL and 4h timeout, close if triggered."""
     trades = await list_open_buy_trades()
     if not trades:
         return {"checked": 0, "closed": 0}
@@ -98,7 +102,10 @@ async def monitor_open_trades() -> dict:
         logger.warning("[Monitor] Cannot fetch any token prices — skipping trade check")
         return {"checked": len(trades), "closed": 0, "error": "price_unavailable"}
 
+    now = datetime.now(timezone.utc)
     closed_count = 0
+    close_details = []
+
     for trade in trades:
         current_price = prices.get(trade.symbol)
         if current_price is None:
@@ -106,34 +113,58 @@ async def monitor_open_trades() -> dict:
             continue
 
         strategy = trade.strategy
-        if strategy is None:
-            continue
-
-        tp = strategy.take_profit
-        sl = strategy.stop_loss
 
         exit_price: float | None = None
-        reason = ""
-        if current_price >= tp:
-            exit_price = tp
-            reason = "take_profit"
-        elif current_price <= sl:
-            exit_price = sl
-            reason = "stop_loss"
+        close_reason: str | None = None
+
+        # ── TP/SL check ───────────────────────────────────────────────
+        if strategy is not None:
+            tp = strategy.take_profit
+            sl = strategy.stop_loss
+            if trade.action == "BUY":
+                if current_price >= tp:
+                    exit_price, close_reason = tp, "TP"
+                elif current_price <= sl:
+                    exit_price, close_reason = sl, "SL"
+            else:  # SELL position
+                if current_price <= tp:
+                    exit_price, close_reason = tp, "TP"
+                elif current_price >= sl:
+                    exit_price, close_reason = sl, "SL"
+
+        # ── Timeout check (4-hour auto-close) ─────────────────────────
+        if exit_price is None and trade.executed_at:
+            ea = trade.executed_at if trade.executed_at.tzinfo else trade.executed_at.replace(tzinfo=timezone.utc)
+            age_hours = (now - ea).total_seconds() / 3600
+            if age_hours >= config.MAX_POSITION_HOLD_HOURS:
+                exit_price  = current_price
+                close_reason = "timeout"
+                logger.info(
+                    "[Monitor] Timeout: trade id=%d  %s  age=%.1fh  exit=%.4f",
+                    trade.id, trade.symbol, age_hours, exit_price,
+                )
 
         if exit_price is not None:
-            await close_trade(trade.id, exit_price=round(exit_price, 4))
+            await close_trade(
+                trade.id,
+                exit_price=round(exit_price, 4),
+                close_reason=close_reason,
+            )
             pnl_pct = (exit_price / trade.entry_price - 1) * 100
+            if trade.action == "SELL":
+                pnl_pct = -pnl_pct
             logger.info(
-                "[Monitor] Closed trade id=%d  %s  entry=%.4f → exit=%.4f  pnl=%+.2f%%",
-                trade.id, reason, trade.entry_price, exit_price, pnl_pct,
+                "[Monitor] Closed trade id=%d  reason=%s  entry=%.4f → exit=%.4f  pnl=%+.2f%%",
+                trade.id, close_reason, trade.entry_price, exit_price, pnl_pct,
             )
             closed_count += 1
+            close_details.append({"trade_id": trade.id, "reason": close_reason, "pnl_pct": round(pnl_pct, 3)})
 
     price_summary = {s: round(p, 4) for s, p in prices.items()}
     logger.info("[Monitor] Checked %d open trade(s), closed %d  prices=%s",
                 len(trades), closed_count, price_summary)
-    return {"checked": len(trades), "closed": closed_count, "prices": price_summary}
+    return {"checked": len(trades), "closed": closed_count, "prices": price_summary,
+            "close_details": close_details}
 
 
 # ---------------------------------------------------------------------------
@@ -155,7 +186,7 @@ async def run_agent_cycle() -> dict:
 
 async def _run_cycle_impl() -> dict:  # noqa: C901
     global _last_compass
-    quote = "BNB"
+    quote = "USDT"  # scalping mode: all trades vs USDT
 
     # ── Read runtime admin config overrides ───────────────────────────────
     bot_cfg   = await get_bot_config()
@@ -167,18 +198,38 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
     _min_conf     = bot_cfg.min_confidence    or config.MIN_CONFIDENCE
     _claude_instr = bot_cfg.claude_instruction or None
 
-    # ── Token selection: scan eligible tokens with hysteresis ─────────────
+    # ── Token selection: scan all eligible tokens, pick top 3 ────────────
+    top_tokens: list[dict] = []
+    scanner_data_by_symbol: dict[str, dict] = {}
     if config.COMPETITION_MODE and len(config.ELIGIBLE_TOKENS) > 1:
         try:
             scanner    = TokenScanner(config.ELIGIBLE_TOKENS)
-            top_tokens = await scanner.scan(top_n=config.TOKEN_SCAN_TOP_N)
-            symbol     = top_tokens[0]["symbol"]
-            logger.info("[Scanner] Selected token: %s  score=%.3f", symbol, top_tokens[0]["score"])
+            top_tokens = await scanner.scan(top_n=10)
+            for t in top_tokens:
+                scanner_data_by_symbol[t["symbol"]] = t
+            # Scan results saved to DB after agent_run is created below
+            logger.info(
+                "[Scanner] Top 3: %s",
+                ", ".join(f"{t['symbol']}({t['score']:.2f})" for t in top_tokens[:3]),
+            )
         except Exception as exc:
             logger.warning("[Scanner] Token scan failed (%s) — falling back to default", exc)
-            symbol = config.TRADING_PAIR.split("/")[0].upper()
-    else:
-        symbol = config.TRADING_PAIR.split("/")[0].upper()
+    if not top_tokens:
+        default = config.TRADING_PAIR.split("/")[0].upper()
+        top_tokens = [{"symbol": default, "score": 0.5}]
+
+    # Determine which tokens we can trade this cycle
+    # (filter out tokens we already have an open position in)
+    open_trades = await list_open_trades()
+    open_symbols = {t.symbol for t in open_trades}
+    open_count   = len(open_trades)
+
+    # Pick first available token from top scan results
+    symbol = config.TRADING_PAIR.split("/")[0].upper()
+    for candidate in top_tokens:
+        if candidate["symbol"] not in open_symbols:
+            symbol = candidate["symbol"]
+            break
 
     base = symbol
 
@@ -194,11 +245,18 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
         if stale_closed:
             logger.info("[Competition] Force-closed %d stale position(s)", stale_closed)
 
-    # ── Position guard: one open BUY at a time ────────────────────────────
-    open_buys = await list_open_buy_trades()
-    if open_buys:
-        logger.info("Position guard: %d open BUY trade(s) — skipping new entry", len(open_buys))
-        return _result("skipped", 0, reason="open_position", open_trades=len(open_buys))
+    # ── Position guard: max MAX_CONCURRENT_POSITIONS open at once ────────
+    if open_count >= config.MAX_CONCURRENT_POSITIONS:
+        logger.info(
+            "Position guard: %d/%d positions full — skipping new entry",
+            open_count, config.MAX_CONCURRENT_POSITIONS,
+        )
+        return _result("skipped", 0, reason="max_positions_reached",
+                       open_trades=open_count, max=config.MAX_CONCURRENT_POSITIONS)
+
+    if symbol in open_symbols:
+        logger.info("Position guard: already holding %s — skipping", symbol)
+        return _result("skipped", 0, reason="token_already_held", symbol=symbol)
 
     # ── Daily loss guard ──────────────────────────────────────────────────
     today_pnl = await get_today_pnl()
@@ -249,6 +307,13 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
     trades_executed      = 0
     total_pnl            = 0.0
     error_message: str | None = None
+
+    # Persist scanner results to DB now that we have a run_id
+    if top_tokens:
+        try:
+            await save_token_scans(run.id, top_tokens)
+        except Exception as _scan_save_exc:
+            logger.debug("[Scanner] Failed to save scan results: %s", _scan_save_exc)
 
     try:
         logger.info("=== AlphaLoop cycle starting  run_id=%d  symbol=%s ===", run.id, symbol)
@@ -320,7 +385,7 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
         compass_profile    = compass["profile"]
         compass_score      = compass["compass_score"]
 
-        # RISK_OFF blocks all trades except hard compliance
+        # RISK_OFF blocks all trades in scalping mode too (extreme stress)
         if compass["regime"] == "RISK_OFF" and not _force_execute:
             logger.warning(
                 "[Compass] RISK_OFF (score=%.1f) — skipping cycle", compass_score,
@@ -329,34 +394,20 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
             return _result("skipped", run.id, reason="risk_off_regime",
                            compass_score=compass_score)
 
-        # Drawdown zone cascade — compass gates applied here (post-compass)
+        # Drawdown zone cascade — position sizing only, no compass score gate in scalping mode
         drawdown_zone: dict = {"zone": "GREEN", "size_multiplier": 1.0, "compass_min": 0}
         if config.COMPETITION_MODE:
             dd_full       = await check_drawdown()
             drawdown_zone = dd_full["zone"]
-            if drawdown_zone["zone"] == "ORANGE" and compass_score < 15:
-                logger.warning(
-                    "[Drawdown] ORANGE zone: compass_score=%.1f < 15 required — skip",
-                    compass_score,
-                )
-                await _finish_run(run.id, 0, 0, 0.0, None)
-                return _result("skipped", run.id, reason="orange_zone_low_compass",
-                               compass_score=compass_score)
-            if drawdown_zone["zone"] == "RED" and compass_score < 35:
-                logger.warning(
-                    "[Drawdown] RED zone: compass_score=%.1f < 35 required — skip",
-                    compass_score,
-                )
-                await _finish_run(run.id, 0, 0, 0.0, None)
-                return _result("skipped", run.id, reason="red_zone_low_compass",
-                               compass_score=compass_score)
+            # Halt at HALT zone only — removed per-zone compass score gates for scalping
 
         # ── 4. Generate strategy via Claude ───────────────────────────────
         logger.info("[4/7] Generating strategy via Claude…")
+        scanner_ctx = scanner_data_by_symbol.get(symbol)
         async with StrategyGenerator() as gen:
             strategy = await gen.generate(
                 symbol, market_data, indicators, indicators_4h,
-                _claude_instr, compass=compass,
+                _claude_instr, compass=compass, scanner_data=scanner_ctx,
             )
 
         strategies_generated = 1
@@ -379,10 +430,10 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
 
         if _hold_overridden:
             px = float(market_data.get("price", strategy.get("entry_price", 0)))
-            strategy["entry_price"] = round(px * 0.995, 4)
-            strategy["stop_loss"]   = round(strategy["entry_price"] * 0.96, 4)
-            strategy["take_profit"] = round(strategy["entry_price"] * 1.06, 4)
-            strategy["confidence"]  = max(strategy.get("confidence", 0.5), 0.55)
+            strategy["entry_price"] = round(px * 0.999, 4)
+            strategy["stop_loss"]   = round(strategy["entry_price"] * 0.990, 4)
+            strategy["take_profit"] = round(strategy["entry_price"] * 1.020, 4)
+            strategy["confidence"]  = max(strategy.get("confidence", 0.5), 0.50)
             strategy["reasoning"]   = (
                 f"[Compliance override: daily trade quota] {strategy.get('reasoning', '')}"
             )
@@ -409,15 +460,13 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
             await _finish_run(run.id, strategies_generated, 0, 0.0, None)
             return _result("skipped", run.id, reason="HOLD")
 
-        # Confidence threshold: compliance mode and compass profile both affect it
+        # Scalping mode: lower confidence floor, no compass profile override
         if _compliance_mode == "hard":
             min_confidence = 0.25
-        elif _compliance_mode == "alert":
+        elif _compliance_mode in ("alert", "soft"):
             min_confidence = 0.30
-        elif _compliance_mode == "soft":
-            min_confidence = min(0.45, compass_profile["min_confidence_override"])
         else:
-            min_confidence = max(_min_conf, compass_profile["min_confidence_override"])
+            min_confidence = _min_conf  # uses config.MIN_CONFIDENCE = 0.45
 
         if strategy["confidence"] < min_confidence:
             logger.info(
@@ -615,7 +664,29 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
 # Scheduler wiring
 # ---------------------------------------------------------------------------
 
-def start_scheduler(interval_minutes: int = 30) -> None:
+async def _take_performance_snapshot() -> None:
+    """Hourly snapshot of portfolio state for equity curve."""
+    try:
+        from db.models import get_today_pnl as _get_pnl, get_trade_stats as _get_stats
+        open_trades = await list_open_buy_trades()
+        realized    = await _get_pnl()
+        stats       = await _get_stats()
+        await save_performance_snapshot(
+            portfolio_value_usd=config.INITIAL_PORTFOLIO_USD + realized,
+            realized_pnl_usd=realized,
+            unrealized_pnl_usd=0.0,
+            open_positions=len(open_trades),
+            total_trades=stats["total_trades"],
+            win_count=stats["win_count"],
+            loss_count=stats["loss_count"],
+        )
+        logger.info("[Snapshot] Portfolio=%.2f  realized=%+.2f  open=%d",
+                    config.INITIAL_PORTFOLIO_USD + realized, realized, len(open_trades))
+    except Exception as exc:
+        logger.error("[Snapshot] Failed: %s", exc)
+
+
+def start_scheduler(interval_minutes: int = 15) -> None:
     from datetime import datetime, timezone, timedelta
     first_run = datetime.now(timezone.utc) + timedelta(seconds=30)
 
@@ -631,6 +702,13 @@ def start_scheduler(interval_minutes: int = 30) -> None:
         monitor_open_trades,
         trigger=IntervalTrigger(minutes=2),
         id="trade_monitor",
+        replace_existing=True,
+        max_instances=1,
+    )
+    scheduler.add_job(
+        _take_performance_snapshot,
+        trigger=IntervalTrigger(minutes=config.SNAPSHOT_INTERVAL_MINUTES),
+        id="performance_snapshot",
         replace_existing=True,
         max_instances=1,
     )

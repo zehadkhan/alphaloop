@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Sequence
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -15,6 +16,7 @@ from sqlalchemy import (
     Text,
     func,
     select,
+    text,
     update,
 )
 from sqlalchemy.ext.asyncio import (
@@ -96,6 +98,9 @@ class Trade(Base):
     executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # Close metadata
+    close_reason: Mapped[str | None] = mapped_column(String(20), nullable=True)  # TP/SL/timeout/manual
+
     # On-chain decision proof (verifiability layer)
     proof_string:  Mapped[str | None] = mapped_column(Text, nullable=True)
     proof_hash:    Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -129,6 +134,44 @@ class BotConfig(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now, onupdate=_now)
 
 
+class TokenScan(Base):
+    """All tokens scored each scanner cycle — stored for dashboard and analysis."""
+    __tablename__ = "token_scans"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True
+    )
+    symbol: Mapped[str] = mapped_column(String(20), nullable=False)
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    score: Mapped[float] = mapped_column(Float, nullable=False)
+    change_1h: Mapped[float | None] = mapped_column(Float, nullable=True)
+    change_4h: Mapped[float | None] = mapped_column(Float, nullable=True)
+    change_24h: Mapped[float | None] = mapped_column(Float, nullable=True)
+    volume_usdt: Mapped[float | None] = mapped_column(Float, nullable=True)
+    volume_spike: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rsi_1h: Mapped[float | None] = mapped_column(Float, nullable=True)
+    price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    sma20_distance: Mapped[float | None] = mapped_column(Float, nullable=True)
+    data_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    scanned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+
+class PerformanceSnapshot(Base):
+    """Hourly portfolio snapshots for equity curve."""
+    __tablename__ = "performance_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    snapshot_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    portfolio_value_usd: Mapped[float] = mapped_column(Float, nullable=False)
+    realized_pnl_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    unrealized_pnl_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    open_positions: Mapped[int] = mapped_column(Integer, default=0)
+    total_trades: Mapped[int] = mapped_column(Integer, default=0)
+    win_count: Mapped[int] = mapped_column(Integer, default=0)
+    loss_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
 # ---------------------------------------------------------------------------
 # Schema initialisation
 # ---------------------------------------------------------------------------
@@ -136,6 +179,14 @@ class BotConfig(Base):
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Safe migrations: add columns that may not exist in older DBs
+        for stmt in [
+            "ALTER TABLE trades ADD COLUMN close_reason VARCHAR(20)",
+        ]:
+            try:
+                await conn.execute(text(stmt))
+            except Exception:
+                pass  # column already exists
     logger.info("Database schema ready: %s", DATABASE_URL)
 
 
@@ -263,6 +314,20 @@ async def list_open_buy_trades() -> Sequence[Trade]:
         return result.scalars().all()
 
 
+async def list_open_trades() -> Sequence[Trade]:
+    """Return all open positions (BUY or SELL) that have not been closed."""
+    async with SessionLocal() as session:
+        q = (
+            select(Trade)
+            .options(selectinload(Trade.strategy))
+            .where(Trade.closed_at.is_(None))
+            .where(Trade.status.in_(["dry_run", "executed"]))
+            .order_by(Trade.executed_at.asc())
+        )
+        result = await session.execute(q)
+        return result.scalars().all()
+
+
 async def close_trade(
     trade_id: int,
     *,
@@ -270,6 +335,7 @@ async def close_trade(
     pnl_usd: float | None = None,
     pnl_percent: float | None = None,
     tx_hash: str | None = None,
+    close_reason: str | None = None,
 ) -> None:
     async with SessionLocal() as session:
         trade = await session.get(Trade, trade_id)
@@ -295,13 +361,15 @@ async def close_trade(
                 pnl_usd=calc_pnl_usd,
                 pnl_percent=calc_pnl_pct,
                 tx_hash=tx_hash,
+                close_reason=close_reason,
                 status=new_status,
                 closed_at=_now(),
             )
         )
         await session.commit()
-        logger.info("Closed trade id=%d  entry=%.4f exit=%.4f pnl=%+.4f (%.4f%%)",
-                    trade_id, trade.entry_price, exit_price, calc_pnl_usd, calc_pnl_pct)
+        logger.info("Closed trade id=%d  entry=%.4f exit=%.4f pnl=%+.4f (%.4f%%)  reason=%s",
+                    trade_id, trade.entry_price, exit_price, calc_pnl_usd, calc_pnl_pct,
+                    close_reason or "—")
 
 
 async def get_today_pnl() -> float:
@@ -470,6 +538,181 @@ async def update_bot_config(**kwargs) -> BotConfig:
         await session.commit()
         await session.refresh(row)
         return row
+
+
+# ---------------------------------------------------------------------------
+# TokenScan CRUD
+# ---------------------------------------------------------------------------
+
+async def save_token_scans(run_id: int | None, scan_results: list[dict]) -> None:
+    """Bulk-insert scanner results for one cycle."""
+    if not scan_results:
+        return
+    async with SessionLocal() as session:
+        rows = [
+            TokenScan(
+                run_id=run_id,
+                symbol=r["symbol"],
+                rank=r.get("rank", i + 1),
+                score=r.get("score", 0.0),
+                change_1h=r.get("change_1h"),
+                change_4h=r.get("change_4h"),
+                change_24h=r.get("change_24h"),
+                volume_usdt=r.get("volume_usdt"),
+                volume_spike=r.get("volume_spike"),
+                rsi_1h=r.get("rsi_1h"),
+                price=r.get("price"),
+                sma20_distance=r.get("sma20_distance"),
+                data_source=r.get("data_source", "binance"),
+            )
+            for i, r in enumerate(scan_results)
+        ]
+        session.add_all(rows)
+        await session.commit()
+        logger.debug("Saved %d token scan rows for run_id=%s", len(rows), run_id)
+
+
+async def get_latest_token_scans(limit: int = 150) -> list[dict]:
+    """Return the most recent scanner cycle results as plain dicts."""
+    async with SessionLocal() as session:
+        # Find the most recent scanned_at timestamp
+        latest = (await session.execute(
+            select(func.max(TokenScan.scanned_at))
+        )).scalar()
+        if not latest:
+            return []
+        # Allow 2-minute window for multi-token bulk scans
+        from datetime import timedelta
+        window_start = latest - timedelta(minutes=2)
+        result = await session.execute(
+            select(TokenScan)
+            .where(TokenScan.scanned_at >= window_start)
+            .order_by(TokenScan.rank.asc())
+            .limit(limit)
+        )
+        rows = result.scalars().all()
+        return [
+            {
+                "symbol":        r.symbol,
+                "rank":          r.rank,
+                "score":         r.score,
+                "change_1h":     r.change_1h,
+                "change_4h":     r.change_4h,
+                "change_24h":    r.change_24h,
+                "volume_usdt":   r.volume_usdt,
+                "volume_spike":  r.volume_spike,
+                "rsi_1h":        r.rsi_1h,
+                "price":         r.price,
+                "sma20_distance": r.sma20_distance,
+                "data_source":   r.data_source,
+                "scanned_at":    r.scanned_at.isoformat() if r.scanned_at else None,
+            }
+            for r in rows
+        ]
+
+
+# ---------------------------------------------------------------------------
+# PerformanceSnapshot CRUD
+# ---------------------------------------------------------------------------
+
+async def save_performance_snapshot(
+    *,
+    portfolio_value_usd: float,
+    realized_pnl_usd: float,
+    unrealized_pnl_usd: float,
+    open_positions: int,
+    total_trades: int,
+    win_count: int,
+    loss_count: int,
+) -> None:
+    async with SessionLocal() as session:
+        row = PerformanceSnapshot(
+            portfolio_value_usd=round(portfolio_value_usd, 4),
+            realized_pnl_usd=round(realized_pnl_usd, 4),
+            unrealized_pnl_usd=round(unrealized_pnl_usd, 4),
+            open_positions=open_positions,
+            total_trades=total_trades,
+            win_count=win_count,
+            loss_count=loss_count,
+        )
+        session.add(row)
+        await session.commit()
+
+
+async def get_performance_history(limit: int = 168) -> list[dict]:
+    """Return up to 168 hourly snapshots (1 week) for the equity curve."""
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(PerformanceSnapshot)
+            .order_by(PerformanceSnapshot.snapshot_time.desc())
+            .limit(limit)
+        )
+        rows = result.scalars().all()
+        return [
+            {
+                "time":              r.snapshot_time.isoformat() if r.snapshot_time else None,
+                "portfolio_value":   r.portfolio_value_usd,
+                "realized_pnl":      r.realized_pnl_usd,
+                "unrealized_pnl":    r.unrealized_pnl_usd,
+                "open_positions":    r.open_positions,
+                "total_trades":      r.total_trades,
+                "win_count":         r.win_count,
+                "loss_count":        r.loss_count,
+            }
+            for r in reversed(rows)  # chronological order
+        ]
+
+
+# ---------------------------------------------------------------------------
+# Trade stats
+# ---------------------------------------------------------------------------
+
+async def get_trade_stats() -> dict:
+    """Aggregate stats: win rate, avg profit, best/worst trade, total realized PnL."""
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(Trade)
+            .where(Trade.closed_at.isnot(None))
+            .where(Trade.pnl_usd.isnot(None))
+        )
+        closed = result.scalars().all()
+
+    if not closed:
+        return {
+            "total_trades": 0,
+            "win_count": 0,
+            "loss_count": 0,
+            "win_rate_pct": 0.0,
+            "avg_profit_usd": 0.0,
+            "avg_hold_hours": 0.0,
+            "best_trade_pct": 0.0,
+            "worst_trade_pct": 0.0,
+            "total_realized_pnl": 0.0,
+        }
+
+    wins = [t for t in closed if (t.pnl_usd or 0) > 0]
+    losses = [t for t in closed if (t.pnl_usd or 0) <= 0]
+
+    hold_hours = []
+    for t in closed:
+        if t.executed_at and t.closed_at:
+            ea = t.executed_at if t.executed_at.tzinfo else t.executed_at.replace(tzinfo=timezone.utc)
+            ca = t.closed_at  if t.closed_at.tzinfo  else t.closed_at.replace(tzinfo=timezone.utc)
+            hold_hours.append((ca - ea).total_seconds() / 3600)
+
+    pnl_pcts = [t.pnl_percent or 0.0 for t in closed]
+
+    return {
+        "total_trades":       len(closed),
+        "win_count":          len(wins),
+        "loss_count":         len(losses),
+        "win_rate_pct":       round(len(wins) / len(closed) * 100, 1),
+        "avg_profit_usd":     round(sum(t.pnl_usd or 0 for t in closed) / len(closed), 4),
+        "avg_hold_hours":     round(sum(hold_hours) / len(hold_hours), 2) if hold_hours else 0.0,
+        "best_trade_pct":     round(max(pnl_pcts), 2),
+        "worst_trade_pct":    round(min(pnl_pcts), 2),
+        "total_realized_pnl": round(sum(t.pnl_usd or 0 for t in closed), 4),
+    }
 
 
 # ---------------------------------------------------------------------------
