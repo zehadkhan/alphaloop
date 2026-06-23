@@ -282,13 +282,17 @@ class StrategyGenerator:
                 "cache_control": {"type": "ephemeral"},
             }
         ]
+        prefill = "{"
         try:
             message = await self._client.messages.create(
                 model=MODEL,
                 max_tokens=512,
                 temperature=0.2,
                 system=system,
-                messages=[{"role": "user", "content": user_prompt}],
+                messages=[
+                    {"role": "user", "content": user_prompt},
+                    {"role": "assistant", "content": prefill},
+                ],
             )
         except anthropic.APIStatusError as exc:
             raise StrategyGeneratorError(
@@ -297,7 +301,7 @@ class StrategyGenerator:
         except anthropic.APIConnectionError as exc:
             raise StrategyGeneratorError(f"Network error: {exc}") from exc
 
-        raw = message.content[0].text
+        raw = prefill + message.content[0].text
         logger.debug(
             "Claude response: input_tokens=%d output_tokens=%d cache_read=%d",
             message.usage.input_tokens,

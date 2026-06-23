@@ -29,23 +29,32 @@ class Config:
     # Eligible BSC tokens — full competition allowlist (149 tokens), filtered to those
     # with Binance USDT spot pairs (scanner uses Binance). Stablecoins excluded (no signal).
     # Chinese-character tokens and non-Binance-listed exotics excluded gracefully by scanner.
+    # Tokens confirmed unroutable on TWAK/PancakeSwap — do not add back without testing
+    TWAK_BLACKLIST: set[str] = {
+        "TON",   # KeyError in scanner (not a standard Binance BEP-20 pair)
+        "ZRO",   # TOKEN_NOT_FOUND on TWAK — no BSC liquidity pool
+        "STG",   # APPROVAL_SENT_SWAP_FAILED — swap reverts on 0x router
+        "LAB",   # Binance-invalid, causes scanner 400 errors
+        "NFT",   # Binance-invalid pair
+    }
+
     ELIGIBLE_TOKENS: list[str] = [
         # Major L1/L2
         "ETH", "XRP", "ADA", "DOT", "AVAX", "ATOM", "LTC", "BCH", "ETC",
-        "TRX", "ZEC", "TON", "ZIL", "ROSE", "KAVA", "ELF", "ACH", "AXL",
+        "TRX", "ZEC", "ZIL", "ROSE", "KAVA", "ELF", "ACH", "AXL",
         # DeFi blue chips
         "LINK", "UNI", "AAVE", "COMP", "SNX", "1INCH", "SUSHI", "YFI",
-        "CAKE", "LDO", "PENDLE", "STG", "RAY",
+        "CAKE", "LDO", "PENDLE", "RAY",
         # AI + infra
-        "FET", "INJ", "FIL", "PEAQ", "AIOZ", "LAB",
+        "FET", "INJ", "FIL", "PEAQ", "AIOZ",
         # Meme / high-vol
         "DOGE", "SHIB", "FLOKI", "BONK", "APE", "LUNC", "BRETT",
         "BABYDOGE", "CHEEMS",
         # BNB ecosystem
-        "TWT", "AXS", "SFP", "NFT", "BTT",
+        "TWT", "AXS", "SFP", "BTT",
         # Mid-cap with Binance liquidity
-        "ZRO", "BAT", "XCN", "DEXE", "FORM", "HTX", "DUSK", "SUSHI",
-        "SNX", "APR", "VELO", "ZETA", "IRYS", "BEAM", "ZIG", "PLUME",
+        "BAT", "XCN", "DEXE", "FORM", "HTX", "DUSK",
+        "APR", "VELO", "ZETA", "IRYS", "BEAM", "ZIG", "PLUME",
         "HUMA", "OPEN",
     ]
 

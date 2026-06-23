@@ -145,17 +145,48 @@ async def monitor_open_trades() -> dict:
                 )
 
         if exit_price is not None:
+            # Execute real on-chain SELL for executed BUY positions
+            actual_exit_price = exit_price
+            if (
+                trade.action == "BUY"
+                and trade.status == "executed"
+                and not config.DRY_RUN
+                and config.TWAK_REST_URL
+            ):
+                try:
+                    from execution.twak_executor import TWAKExecutor
+                    sell_executor = TWAKExecutor()
+                    # Estimate current token value in USD
+                    sell_value_usd = round(current_price * (trade.amount_usd / trade.entry_price), 4)
+                    sell_value_usd = max(sell_value_usd, 0.01)
+                    logger.info(
+                        "[Monitor] Executing SELL swap: %s → BNB  ~$%.2f  reason=%s",
+                        trade.symbol, sell_value_usd, close_reason,
+                    )
+                    sell_swap = await sell_executor.swap(trade.symbol, "BNB", sell_value_usd)
+                    if sell_swap.get("price") and sell_swap["price"] > 0:
+                        actual_exit_price = sell_swap["price"]
+                    logger.info(
+                        "[Monitor] SELL executed: tx=%s  exit_price=%.6f",
+                        sell_swap.get("tx_hash"), actual_exit_price,
+                    )
+                except Exception as sell_exc:
+                    logger.error(
+                        "[Monitor] SELL swap failed for trade %d (%s): %s — closing DB only",
+                        trade.id, trade.symbol, sell_exc,
+                    )
+
             await close_trade(
                 trade.id,
-                exit_price=round(exit_price, 4),
+                exit_price=round(actual_exit_price, 4),
                 close_reason=close_reason,
             )
-            pnl_pct = (exit_price / trade.entry_price - 1) * 100
+            pnl_pct = (actual_exit_price / trade.entry_price - 1) * 100
             if trade.action == "SELL":
                 pnl_pct = -pnl_pct
             logger.info(
                 "[Monitor] Closed trade id=%d  reason=%s  entry=%.4f → exit=%.4f  pnl=%+.2f%%",
-                trade.id, close_reason, trade.entry_price, exit_price, pnl_pct,
+                trade.id, close_reason, trade.entry_price, actual_exit_price, pnl_pct,
             )
             closed_count += 1
             close_details.append({"trade_id": trade.id, "reason": close_reason, "pnl_pct": round(pnl_pct, 3)})
@@ -205,6 +236,8 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
         try:
             scanner    = TokenScanner(config.ELIGIBLE_TOKENS)
             top_tokens = await scanner.scan(top_n=10)
+            # Remove blacklisted tokens before selection
+            top_tokens = [t for t in top_tokens if t["symbol"] not in config.TWAK_BLACKLIST]
             for t in top_tokens:
                 scanner_data_by_symbol[t["symbol"]] = t
             # Scan results saved to DB after agent_run is created below
