@@ -15,6 +15,7 @@ import LiveChart from "@/components/LiveChart";
 import CompetitionPanel from "@/components/CompetitionPanel";
 import TokenScannerPanel from "@/components/TokenScannerPanel";
 import TwakStatusCard from "@/components/TwakStatusCard";
+import GatesPanel from "@/components/GatesPanel";
 import type { Health, AgentStatus, Trade, Strategy, AgentRun, RunResult, CompetitionStatus, ActivityItem, BotConfig, TwakStatus } from "@/types";
 
 type Notification = {
@@ -281,13 +282,14 @@ export default function Dashboard() {
           currentPrice={markPrice}
         />
 
-        {/* ── Row 2: Activity + Competition side-by-side ───────────────── */}
+        {/* ── Row 2: Activity + Competition + Gates ────────────────────── */}
         <div className="grid grid-cols-1 xl:grid-cols-3 gap-5">
           <div className="xl:col-span-2">
             <ActivityFeed items={activity} />
           </div>
           <div className="space-y-5">
             {competition && <CompetitionPanel status={competition} agentStatus={status} />}
+            <GatesPanel />
             <TwakStatusCard status={twakStatus} />
             <TokenScannerPanel competitionMode={status?.competition_mode ?? false} />
           </div>

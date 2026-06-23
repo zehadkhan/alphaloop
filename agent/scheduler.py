@@ -407,11 +407,11 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
             # Gate 1: Fear & Greed — extreme fear or extreme greed → skip
             if fg["value"] < 25:
                 logger.info("[Gate1] Fear&Greed=%d (Extreme Fear) — market panic, skip", fg["value"])
-                await _finish_run(run.id, 0, 0, 0.0, None)
+                await _finish_run(run.id, 0, 0, 0.0, f"skip:extreme_fear:{fg['value']}")
                 return _result("skipped", run.id, reason="extreme_fear", fear_greed=fg["value"])
             if fg["value"] > 85:
                 logger.info("[Gate1] Fear&Greed=%d (Extreme Greed) — bubble risk, skip", fg["value"])
-                await _finish_run(run.id, 0, 0, 0.0, None)
+                await _finish_run(run.id, 0, 0, 0.0, f"skip:extreme_greed:{fg['value']}")
                 return _result("skipped", run.id, reason="extreme_greed", fear_greed=fg["value"])
 
             # Gate 2: BTC 4h trend — if BTC in heavy downtrend, everything follows
@@ -420,14 +420,14 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
                     "[Gate2] BTC 4h downtrend (80h=%+.1f%%, above_sma10=%s) — skip",
                     btc["change_pct"], btc["above_sma10"],
                 )
-                await _finish_run(run.id, 0, 0, 0.0, None)
+                await _finish_run(run.id, 0, 0, 0.0, f"skip:btc_downtrend:{btc['change_pct']:.1f}")
                 return _result("skipped", run.id, reason="btc_downtrend",
                                btc_change_pct=btc["change_pct"])
 
             # Gate 3: Token 7-day performance — heavily falling token → skip
             if token_7d < -20:
                 logger.info("[Gate3] %s down %.1f%% in 7d — weak token, skip", symbol, token_7d)
-                await _finish_run(run.id, 0, 0, 0.0, None)
+                await _finish_run(run.id, 0, 0, 0.0, f"skip:token_weak_7d:{symbol}:{token_7d:.1f}")
                 return _result("skipped", run.id, reason="token_weak_7d",
                                symbol=symbol, change_7d=token_7d)
 
@@ -741,7 +741,7 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
             if not route_ok:
                 _auto_blacklist(symbol, route_err)
                 logger.warning("[RouteCheck] %s unroutable — blacklisted. Skipping.", symbol)
-                await _finish_run(run.id, strategies_generated, 0, 0.0, None)
+                await _finish_run(run.id, strategies_generated, 0, 0.0, f"skip:unroutable_token:{symbol}")
                 return _result("skipped", run.id, reason="unroutable_token",
                                symbol=symbol, error=route_err)
             logger.info("[RouteCheck] %s route OK", symbol)

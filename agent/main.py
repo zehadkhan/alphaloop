@@ -338,6 +338,33 @@ def _activity_item(run: AgentRun, strategies: list, trades: list) -> dict:
         except Exception:
             pass
 
+    if run.error_message and run.error_message.startswith("skip:"):
+        parts = run.error_message.split(":")
+        skip_reason = parts[1] if len(parts) > 1 else "unknown"
+        skip_titles = {
+            "extreme_fear":     ("Gate blocked — Extreme Fear",
+                                 f"Fear & Greed = {parts[2] if len(parts) > 2 else '?'}/100. "
+                                 "Market in panic mode — bot skipped to avoid buying the dip of a freefall."),
+            "extreme_greed":    ("Gate blocked — Extreme Greed",
+                                 f"Fear & Greed = {parts[2] if len(parts) > 2 else '?'}/100. "
+                                 "Market overheated — high risk of sharp reversal."),
+            "btc_downtrend":    ("Gate blocked — BTC Downtrend",
+                                 f"BTC 80h change: {parts[2] if len(parts) > 2 else '?'}%. "
+                                 "When BTC falls, altcoins follow — bot waited for recovery."),
+            "token_weak_7d":    ("Gate blocked — Token Weak (7-day)",
+                                 f"{parts[2] if len(parts) > 2 else 'Token'} down {abs(float(parts[3])) if len(parts) > 3 else '?'}% "
+                                 "in 7 days — falling knife, not a safe entry."),
+            "unroutable_token": ("Skipped — Token Cannot Be Traded",
+                                 f"{parts[2] if len(parts) > 2 else 'Token'} has no swap route on TWAK/BSC. "
+                                 "Added to blacklist automatically."),
+        }
+        title, detail = skip_titles.get(skip_reason, (
+            f"Skipped — {skip_reason.replace('_', ' ').title()}",
+            "Market quality gate prevented trade this cycle."
+        ))
+        return {**base, "type": "skipped", "color": "orange",
+                "title": title, "detail": detail, "reasoning": None}
+
     if run.error_message:
         return {**base, "type": "error", "color": "red",
                 "title": "System error — the cycle could not complete",
@@ -349,8 +376,8 @@ def _activity_item(run: AgentRun, strategies: list, trades: list) -> dict:
 
     if not strategies and not trades:
         return {**base, "type": "skipped", "color": "gray",
-                "title": "Skipped — already holding an open position",
-                "detail": "The bot only opens one trade at a time. It waited for the current position to close before looking for a new one.",
+                "title": "Skipped — max positions held or token already open",
+                "detail": "The bot only opens one trade per token at a time. It waited for conditions to improve.",
                 "reasoning": None}
 
     buy_strats   = [s for s in strategies if s.action == "BUY"]
@@ -703,6 +730,46 @@ async def get_stats() -> dict:
     """Return aggregate trading statistics: win rate, avg profit, best/worst trade."""
     stats = await get_trade_stats()
     return stats
+
+
+@app.get("/gates", tags=["data"])
+async def get_gates() -> dict:
+    """Return live market gate status: Fear & Greed, BTC trend, blacklist."""
+    from data.sentiment import get_fear_greed, get_btc_4h_trend
+    from agent.scheduler import _last_compass
+    import asyncio as _aio
+
+    fg, btc = await _aio.gather(get_fear_greed(), get_btc_4h_trend())
+
+    gate1_pass = 25 <= fg["value"] <= 85
+    gate2_pass = btc["uptrend"]
+
+    return {
+        "gates": {
+            "fear_greed": {
+                "value":       fg["value"],
+                "label":       fg["label"],
+                "pass":        gate1_pass,
+                "reason":      None if gate1_pass else (
+                    "Extreme Fear — market panic" if fg["value"] < 25 else "Extreme Greed — bubble risk"
+                ),
+            },
+            "btc_trend": {
+                "change_80h":  btc["change_pct"],
+                "above_sma10": btc["above_sma10"],
+                "uptrend":     btc["uptrend"],
+                "pass":        gate2_pass,
+                "reason":      None if gate2_pass else f"BTC 80h downtrend ({btc['change_pct']:+.1f}%)",
+            },
+            "token_7d": {
+                "note": "Checked per-token at cycle time",
+                "threshold": -20,
+            },
+        },
+        "all_pass":  gate1_pass and gate2_pass,
+        "blacklist": sorted(config.TWAK_BLACKLIST),
+        "compass":   _last_compass["regime"] if _last_compass else None,
+    }
 
 
 @app.post("/admin/close/{trade_id}", tags=["admin"])
