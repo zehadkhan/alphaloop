@@ -395,6 +395,51 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
     try:
         logger.info("=== AlphaLoop cycle starting  run_id=%d  symbol=%s ===", run.id, symbol)
 
+        # ── 0. Market quality gates (skip expensive API calls if market bad) ──
+        if not _force_execute:
+            from data.sentiment import get_fear_greed, get_btc_4h_trend, get_token_7d_change
+            fg, btc, token_7d = await asyncio.gather(
+                get_fear_greed(),
+                get_btc_4h_trend(),
+                get_token_7d_change(symbol),
+            )
+
+            # Gate 1: Fear & Greed — extreme fear or extreme greed → skip
+            if fg["value"] < 25:
+                logger.info("[Gate1] Fear&Greed=%d (Extreme Fear) — market panic, skip", fg["value"])
+                await _finish_run(run.id, 0, 0, 0.0, None)
+                return _result("skipped", run.id, reason="extreme_fear", fear_greed=fg["value"])
+            if fg["value"] > 85:
+                logger.info("[Gate1] Fear&Greed=%d (Extreme Greed) — bubble risk, skip", fg["value"])
+                await _finish_run(run.id, 0, 0, 0.0, None)
+                return _result("skipped", run.id, reason="extreme_greed", fear_greed=fg["value"])
+
+            # Gate 2: BTC 4h trend — if BTC in heavy downtrend, everything follows
+            if not btc["uptrend"]:
+                logger.info(
+                    "[Gate2] BTC 4h downtrend (80h=%+.1f%%, above_sma10=%s) — skip",
+                    btc["change_pct"], btc["above_sma10"],
+                )
+                await _finish_run(run.id, 0, 0, 0.0, None)
+                return _result("skipped", run.id, reason="btc_downtrend",
+                               btc_change_pct=btc["change_pct"])
+
+            # Gate 3: Token 7-day performance — heavily falling token → skip
+            if token_7d < -20:
+                logger.info("[Gate3] %s down %.1f%% in 7d — weak token, skip", symbol, token_7d)
+                await _finish_run(run.id, 0, 0, 0.0, None)
+                return _result("skipped", run.id, reason="token_weak_7d",
+                               symbol=symbol, change_7d=token_7d)
+
+            logger.info(
+                "[Gates] PASS — F&G=%d (%s)  BTC_80h=%+.1f%%  %s_7d=%+.1f%%",
+                fg["value"], fg["label"], btc["change_pct"], symbol, token_7d,
+            )
+        else:
+            fg = {"value": 50, "label": "Neutral"}
+            btc = {"uptrend": True, "change_pct": 0.0}
+            token_7d = 0.0
+
         # ── 1. Fetch market data ──────────────────────────────────────────
         logger.info("[1/7] Fetching market data…")
         async with CMCClient() as cmc:
@@ -486,10 +531,19 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
         # ── 4. Generate strategy via Claude ───────────────────────────────
         logger.info("[4/7] Generating strategy via Claude…")
         scanner_ctx = scanner_data_by_symbol.get(symbol)
+        # Attach sentiment data so Claude factors it into confidence
+        sentiment_ctx = {
+            "fear_greed_value": fg["value"],
+            "fear_greed_label": fg["label"],
+            "btc_80h_change":   btc["change_pct"],
+            "btc_uptrend":      btc["uptrend"],
+            "token_7d_change":  token_7d,
+        }
         async with StrategyGenerator() as gen:
             strategy = await gen.generate(
                 symbol, market_data, indicators, indicators_4h,
                 _claude_instr, compass=compass, scanner_data=scanner_ctx,
+                sentiment=sentiment_ctx,
             )
 
         strategies_generated = 1

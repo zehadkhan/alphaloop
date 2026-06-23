@@ -47,6 +47,8 @@ Analyze the following market data for {pair} and produce a trading strategy.
 
 ## Technical Indicators — 1h/4h (scalping entry timing){indicators_4h_section}
 
+## Market Sentiment{sentiment_section}
+
 ## Token Scanner Context{scanner_section}
 
 ## 5-Axis Market Compass (AlphaLoop regime engine){compass_section}
@@ -142,6 +144,7 @@ class StrategyGenerator:
         extra_instruction: str | None = None,
         compass: dict | None = None,
         scanner_data: dict | None = None,
+        sentiment: dict | None = None,
     ) -> dict:
         """Call Claude and return a validated strategy dict.
 
@@ -150,7 +153,7 @@ class StrategyGenerator:
             action != HOLD and confidence >= CONFIDENCE_THRESHOLD.
         """
         pair   = market_data.get("symbol", symbol) + "/USDT"
-        prompt = self._build_prompt(pair, market_data, indicators, indicators_4h, extra_instruction, compass, scanner_data)
+        prompt = self._build_prompt(pair, market_data, indicators, indicators_4h, extra_instruction, compass, scanner_data, sentiment)
         raw    = await self._call_claude(prompt)
         strategy = self._parse_and_validate(raw)
         strategy["should_execute"] = (
@@ -181,6 +184,7 @@ class StrategyGenerator:
         extra_instruction: str | None = None,
         compass: dict | None = None,
         scanner_data: dict | None = None,
+        sentiment: dict | None = None,
     ) -> str:
         price = market_data.get("price", 0.0)
 
@@ -220,6 +224,20 @@ class StrategyGenerator:
             )
         else:
             compass_section = "\n- (not available this cycle)"
+
+        # Build sentiment section
+        if sentiment:
+            fg_val   = sentiment.get("fear_greed_value", 50)
+            fg_label = sentiment.get("fear_greed_label", "Neutral")
+            btc_chg  = sentiment.get("btc_80h_change", 0.0)
+            tok_7d   = sentiment.get("token_7d_change", 0.0)
+            sentiment_section = (
+                f"\n- Fear & Greed Index  : {fg_val}/100 ({fg_label})"
+                f"\n- BTC trend (80h)     : {btc_chg:+.1f}% {'↑ uptrend' if sentiment.get('btc_uptrend') else '↓ downtrend'}"
+                f"\n- {pair.split('/')[0]} 7-day change : {tok_7d:+.1f}%"
+            )
+        else:
+            sentiment_section = "\n- (not available this cycle)"
 
         # Build scanner section
         if scanner_data:
@@ -269,6 +287,7 @@ class StrategyGenerator:
             sell_sl=sell_sl,
             sell_tp=sell_tp,
             indicators_4h_section=indicators_4h_section,
+            sentiment_section=sentiment_section,
             scanner_section=scanner_section,
             compass_section=compass_section,
         )
