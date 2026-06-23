@@ -204,7 +204,7 @@ export default function Dashboard() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [fetchTokenPrice]);
+  }, [fetchTokenPrice, addNotif]);
 
   const handleMonitor = useCallback(async () => {
     setMonitoring(true);

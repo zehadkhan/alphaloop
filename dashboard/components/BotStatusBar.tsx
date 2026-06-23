@@ -253,7 +253,9 @@ export default function BotStatusBar({ status, competition, runs, paused = false
           <PauseCircle size={16} className="text-amber-400 shrink-0" />
         )}
         {!gates?.btc_trend.pass && tone !== "error" && (
-          <TrendingDown size={16} className="text-amber-400 shrink-0 opacity-70" title="BTC downtrend" />
+          <span title="BTC downtrend" className="shrink-0">
+            <TrendingDown size={16} className="text-amber-400 opacity-70" />
+          </span>
         )}
       </div>
     </div>
