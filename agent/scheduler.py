@@ -27,6 +27,8 @@ from agent.competition import (
     check_drawdown,
     force_close_stale_positions,
 )
+from agent.portfolio import cap_position_usd
+from agent.pricing import round_price
 from agent.proof import build_proof, commit_proof_onchain
 from data.token_scanner import TokenScanner
 from db.models import (
@@ -184,6 +186,7 @@ async def monitor_open_trades() -> dict:
         if exit_price is not None:
             # Execute real on-chain SELL for executed BUY positions
             actual_exit_price = exit_price
+            sell_tx_hash: str | None = None
             if (
                 trade.action == "BUY"
                 and trade.status == "executed"
@@ -201,11 +204,12 @@ async def monitor_open_trades() -> dict:
                         trade.symbol, sell_value_usd, close_reason,
                     )
                     sell_swap = await sell_executor.swap(trade.symbol, "BNB", sell_value_usd)
+                    sell_tx_hash = sell_swap.get("tx_hash")
                     if sell_swap.get("price") and sell_swap["price"] > 0:
                         actual_exit_price = sell_swap["price"]
                     logger.info(
-                        "[Monitor] SELL executed: tx=%s  exit_price=%.6f",
-                        sell_swap.get("tx_hash"), actual_exit_price,
+                        "[Monitor] SELL executed: tx=%s  exit_price=%.8f",
+                        sell_tx_hash, actual_exit_price,
                     )
                 except Exception as sell_exc:
                     logger.error(
@@ -215,7 +219,8 @@ async def monitor_open_trades() -> dict:
 
             await close_trade(
                 trade.id,
-                exit_price=round(actual_exit_price, 4),
+                exit_price=round_price(actual_exit_price),
+                tx_hash=sell_tx_hash,
                 close_reason=close_reason,
             )
             pnl_pct = (actual_exit_price / trade.entry_price - 1) * 100
@@ -361,6 +366,7 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
     # override Claude HOLD, skip edge gate + backtest. Escalate further after 23 UTC.
     _force_execute    = False
     _compliance_mode  = "normal"
+    _fear_size_mult   = 1.0
     if config.COMPETITION_MODE:
         now          = datetime.now(timezone.utc)
         in_window    = COMPETITION_START <= now <= COMPETITION_END
@@ -404,15 +410,31 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
                 get_token_7d_change(symbol),
             )
 
-            # Gate 1: Fear & Greed — extreme fear or extreme greed → skip
+            # Gate 1: Fear & Greed — extreme fear or extreme greed
             if fg["value"] < 25:
-                logger.info("[Gate1] Fear&Greed=%d (Extreme Fear) — market panic, skip", fg["value"])
-                await _finish_run(run.id, 0, 0, 0.0, f"skip:extreme_fear:{fg['value']}")
-                return _result("skipped", run.id, reason="extreme_fear", fear_greed=fg["value"])
+                if config.COMPETITION_MODE:
+                    _fear_size_mult = 0.5
+                    logger.info(
+                        "[Gate1] Fear&Greed=%d (Extreme Fear) — competition mode: "
+                        "reducing size to 50%%, continuing",
+                        fg["value"],
+                    )
+                else:
+                    logger.info("[Gate1] Fear&Greed=%d (Extreme Fear) — market panic, skip", fg["value"])
+                    await _finish_run(run.id, 0, 0, 0.0, f"skip:extreme_fear:{fg['value']}")
+                    return _result("skipped", run.id, reason="extreme_fear", fear_greed=fg["value"])
             if fg["value"] > 85:
-                logger.info("[Gate1] Fear&Greed=%d (Extreme Greed) — bubble risk, skip", fg["value"])
-                await _finish_run(run.id, 0, 0, 0.0, f"skip:extreme_greed:{fg['value']}")
-                return _result("skipped", run.id, reason="extreme_greed", fear_greed=fg["value"])
+                if config.COMPETITION_MODE:
+                    _fear_size_mult = 0.5
+                    logger.info(
+                        "[Gate1] Fear&Greed=%d (Extreme Greed) — competition mode: "
+                        "reducing size to 50%%, continuing",
+                        fg["value"],
+                    )
+                else:
+                    logger.info("[Gate1] Fear&Greed=%d (Extreme Greed) — bubble risk, skip", fg["value"])
+                    await _finish_run(run.id, 0, 0, 0.0, f"skip:extreme_greed:{fg['value']}")
+                    return _result("skipped", run.id, reason="extreme_greed", fear_greed=fg["value"])
 
             # Gate 2: BTC 4h trend — if BTC in heavy downtrend, everything follows
             if not btc["uptrend"]:
@@ -700,6 +722,7 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
         if config.TWAK_REST_URL:
             from execution.twak_executor import TWAKExecutor
             executor = TWAKExecutor()
+            await executor.init_address()
             logger.info("[6/7] Executing swap via TWAK REST…")
         else:
             wallet   = WalletAgent()
@@ -721,12 +744,22 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
                 return _result("skipped", run.id, reason="no_long_to_sell", symbol=symbol)
             token_in, token_out = base, quote
 
-        # Position sizing: confidence × compass regime × drawdown zone
+        # Position sizing: confidence × compass regime × drawdown zone × fear multiplier
         base_position  = _pos_size_usd * max(0.5, min(1.0, strategy["confidence"]))
         compass_mult   = compass_profile.get("max_position_pct", 1.0)
         zone_mult      = drawdown_zone.get("size_multiplier", 1.0)
-        position_usd   = round(base_position * compass_mult * zone_mult, 2)
-        position_usd   = max(position_usd, 0.01)
+        position_usd   = round(base_position * compass_mult * zone_mult * _fear_size_mult, 2)
+        position_usd   = max(position_usd, config.MIN_SWAP_USD)
+
+        if config.COMPETITION_MODE and config.TWAK_REST_URL:
+            try:
+                position_usd = await cap_position_usd(
+                    position_usd, executor.address or config.AGENT_WALLET_ADDRESS or None,
+                )
+            except Exception as cap_exc:
+                logger.debug("[Sizing] Portfolio cap skipped: %s", cap_exc)
+
+        position_usd = max(position_usd, config.MIN_SWAP_USD)
 
         logger.info(
             "[7/7] Position sizing: base=$%.2f × compass(%.0f%%) × zone(%.0f%%) = $%.2f  "
@@ -755,6 +788,7 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
             unroutable_signals = (
                 "TOKEN_NOT_FOUND", "APPROVAL_SENT_SWAP_FAILED",
                 "VALIDATION_ERROR", "400 Bad Request",
+                "no route", "NO_ROUTE", "No route",
             )
             if any(sig in err_msg for sig in unroutable_signals):
                 _auto_blacklist(symbol, err_msg[:120])

@@ -24,12 +24,33 @@ export function timeUntil(dateStr: string | null): string {
   return `in ${Math.floor(diff / 86400)}d`;
 }
 
-export function formatPrice(n: number | null | undefined, decimals = 2): string {
+export function formatPrice(n: number | null | undefined, decimals?: number): string {
   if (n == null) return "—";
+  if (decimals !== undefined) {
+    return "$" + n.toLocaleString("en-US", {
+      minimumFractionDigits: decimals,
+      maximumFractionDigits: decimals,
+    });
+  }
+  const ap = Math.abs(n);
+  let d = 2;
+  if (ap < 0.000001) d = 10;
+  else if (ap < 0.0001) d = 8;
+  else if (ap < 0.01) d = 6;
+  else if (ap < 1) d = 4;
   return "$" + n.toLocaleString("en-US", {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
+    minimumFractionDigits: Math.min(2, d),
+    maximumFractionDigits: d,
   });
+}
+
+export function bscscanTxUrl(txHash: string): string {
+  return `https://bscscan.com/tx/${txHash}`;
+}
+
+export function shortenHash(hash: string, head = 8, tail = 6): string {
+  if (hash.length <= head + tail + 1) return hash;
+  return `${hash.slice(0, head)}…${hash.slice(-tail)}`;
 }
 
 export function formatPct(n: number | null | undefined, decimals = 2): string {

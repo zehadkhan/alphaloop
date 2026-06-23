@@ -13,6 +13,8 @@ import os
 import httpx
 from dotenv import load_dotenv
 
+from data.bsc_token_addresses import get_bsc_address
+
 load_dotenv()
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,10 @@ async def _resolve_bsc_token(symbol: str) -> str:
     the lookup fails so the caller can still attempt the swap.
     """
     sym = symbol.upper()
+    hard = get_bsc_address(sym)
+    if hard:
+        _bsc_address_cache[sym] = hard
+        return hard
     if sym in _TWAK_KNOWN_SYMBOLS:
         return sym
     if sym in _bsc_address_cache:
@@ -86,6 +92,42 @@ def _load_credentials() -> tuple[str, str]:
 
 class TWAKExecutorError(Exception):
     pass
+
+
+def _extract_tx_hash(data: dict) -> str | None:
+    """Recursively find a 0x transaction hash in a TWAK response."""
+    direct_keys = (
+        "txHash", "tx_hash", "hash", "transactionHash",
+        "swapTxHash", "approvalTxHash",
+    )
+    for key in direct_keys:
+        val = data.get(key)
+        if isinstance(val, str) and val.startswith("0x") and len(val) >= 66:
+            return val
+
+    receipt = data.get("receipt")
+    if isinstance(receipt, dict):
+        found = _extract_tx_hash(receipt)
+        if found:
+            return found
+
+    for key in ("result", "data", "swap", "transaction", "tx"):
+        nested = data.get(key)
+        if isinstance(nested, dict):
+            found = _extract_tx_hash(nested)
+            if found:
+                return found
+        elif isinstance(nested, list):
+            for item in nested:
+                if isinstance(item, dict):
+                    found = _extract_tx_hash(item)
+                    if found:
+                        return found
+
+    for val in data.values():
+        if isinstance(val, str) and val.startswith("0x") and len(val) == 66:
+            return val
+    return None
 
 
 class TWAKExecutor:
@@ -291,8 +333,7 @@ class TWAKExecutor:
         })
 
         logger.info("TWAK swap raw response: %s", data)
-        tx_hash   = (data.get("txHash") or data.get("tx_hash") or data.get("hash")
-                     or data.get("transactionHash") or data.get("receipt", {}).get("transactionHash"))
+        tx_hash = _extract_tx_hash(data)
         amount_out = float(data.get("toAmount") or data.get("receivedAmount")
                           or data.get("amountOut") or 0)
         # TWAK response includes a human-readable summary: "0.001 BNB -> 0.0354 DEXE"
@@ -316,7 +357,7 @@ class TWAKExecutor:
             "amount_out": amount_out,
             "price":      round(price, 6),
             "gas_used":   data.get("gasUsed", 0),
-            "status":     "success" if tx_hash else "failed",
+            "status":     "success" if (tx_hash or amount_out > 0) else "failed",
         }
 
     async def competition_register(self) -> dict:

@@ -30,7 +30,7 @@ function fgBar(val: number) {
   return "bg-red-400";
 }
 
-export default function GatesPanel() {
+export default function GatesPanel({ competitionMode = false }: { competitionMode?: boolean }) {
   const [data, setData]       = useState<GateData | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<string>("");
@@ -60,6 +60,7 @@ export default function GatesPanel() {
   const { gates, all_pass, blacklist, compass } = data;
   const fg  = gates.fear_greed;
   const btc = gates.btc_trend;
+  const fgSoftPass = !fg.pass && competitionMode && (fg.value < 25 || fg.value > 85);
 
   return (
     <div className="rounded-2xl border border-border-subtle bg-surface p-5 space-y-4">
@@ -89,11 +90,17 @@ export default function GatesPanel() {
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
 
         {/* Gate 1: Fear & Greed */}
-        <div className={`rounded-xl border p-3 ${fg.pass ? "border-border-subtle bg-surface-2" : "border-loss/40 bg-loss/5"}`}>
+        <div className={`rounded-xl border p-3 ${
+          fg.pass ? "border-border-subtle bg-surface-2"
+          : fgSoftPass ? "border-amber-500/40 bg-amber-500/5"
+          : "border-loss/40 bg-loss/5"
+        }`}>
           <div className="flex items-center justify-between mb-2">
             <span className="text-[10px] font-semibold text-text-muted uppercase tracking-wider">Fear & Greed</span>
             {fg.pass
               ? <CheckCircle size={13} className="text-profit" />
+              : fgSoftPass
+              ? <AlertCircle size={13} className="text-amber-400" />
               : <XCircle    size={13} className="text-loss"   />}
           </div>
           <div className={`text-2xl font-bold tabular-nums ${fgColor(fg.value)}`}>
@@ -104,7 +111,9 @@ export default function GatesPanel() {
           </div>
           <p className="mt-1.5 text-[10px] text-text-muted">{fg.label}</p>
           {!fg.pass && fg.reason && (
-            <p className="mt-1 text-[10px] text-loss font-medium">⚠ {fg.reason}</p>
+            <p className={`mt-1 text-[10px] font-medium ${fgSoftPass ? "text-amber-400" : "text-loss"}`}>
+              {fgSoftPass ? "⚡ Competition: 50% size, cycle continues" : `⚠ ${fg.reason}`}
+            </p>
           )}
           <p className="mt-1 text-[10px] text-text-muted opacity-60">Pass zone: 25–85</p>
         </div>

@@ -19,6 +19,10 @@ const SKIP_LABELS: Record<string, string> = {
   risk_off_regime:  "Risk-Off Regime",
   max_positions_reached: "Max Positions",
   token_already_held:    "Already Held",
+  edge_gate_failed: "Edge Below Fees",
+  swap_failed:      "Swap Failed",
+  drawdown_halt:    "Drawdown Halt",
+  daily_loss_limit: "Daily Loss Limit",
   ohlcv_unavailable:     "Data Unavailable",
   unreliable_data:       "Unreliable Data",
 };
@@ -30,7 +34,7 @@ function parseSkipReason(msg: string): { label: string; detail: string } | null 
   const label = SKIP_LABELS[key] ?? `Skipped: ${key}`;
   const extra = parts.slice(2).join(":");
   let detail  = "";
-  if (key === "extreme_fear")    detail = `F&G = ${extra}/100`;
+  if (key === "extreme_fear")    detail = `F&G = ${extra}/100 · competition mode uses 50% size (no longer full skip)`;
   else if (key === "extreme_greed")   detail = `F&G = ${extra}/100`;
   else if (key === "btc_downtrend")   detail = `BTC 80h: ${extra}%`;
   else if (key === "token_weak_7d")   detail = `${parts[2]} 7d: ${parts[3]}%`;

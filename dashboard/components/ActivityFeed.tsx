@@ -46,6 +46,26 @@ const TYPE_ICONS: Record<ActivityItem["type"], React.ElementType> = {
   completed: CheckCircle,
 };
 
+const TYPE_LABELS: Record<ActivityItem["type"], string> = {
+  trade:     "TRADE",
+  hold:      "HOLD",
+  rejected:  "REJECTED",
+  skipped:   "SKIPPED",
+  error:     "ERROR",
+  running:   "LIVE",
+  completed: "DONE",
+};
+
+const TYPE_BADGE: Record<ActivityItem["type"], string> = {
+  trade:     "bg-profit/15 text-profit border-profit/25",
+  hold:      "bg-amber-400/15 text-amber-400 border-amber-400/25",
+  rejected:  "bg-orange-400/15 text-orange-400 border-orange-400/25",
+  skipped:   "bg-orange-400/15 text-orange-400 border-orange-400/25",
+  error:     "bg-loss/15 text-loss border-loss/25",
+  running:   "bg-accent/15 text-accent border-accent/25",
+  completed: "bg-white/5 text-text-muted border-border-subtle",
+};
+
 // ─── ActivityRow ──────────────────────────────────────────────────────────────
 function ActivityRow({
   item,
@@ -79,7 +99,10 @@ function ActivityRow({
       <div className="pb-5">
         {/* Title row */}
         <div className="flex items-start justify-between gap-2">
-          <div className="flex items-center gap-1.5 min-w-0">
+          <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
+            <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border shrink-0 ${TYPE_BADGE[item.type]}`}>
+              {TYPE_LABELS[item.type]}
+            </span>
             <Icon size={13} className={`shrink-0 ${titleClass}`} />
             <p className={`text-sm font-medium leading-snug ${titleClass}`}>
               {item.title}

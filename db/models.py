@@ -26,6 +26,8 @@ from sqlalchemy.ext.asyncio import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, selectinload
 
+from agent.pricing import round_price
+
 logger = logging.getLogger(__name__)
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./alphaloop.db")
@@ -348,6 +350,8 @@ async def close_trade(
         calc_pnl_usd = round((exit_price / trade.entry_price - 1) * trade.amount_usd, 4)
         calc_pnl_pct = round((exit_price / trade.entry_price - 1) * 100, 4)
 
+        rounded_exit = round_price(exit_price)
+
         # Preserve dry_run status — close_trade is called for both real and
         # simulated trades; changing "dry_run" to "executed" would misrepresent
         # simulation results in the UI.
@@ -357,7 +361,7 @@ async def close_trade(
             update(Trade)
             .where(Trade.id == trade_id)
             .values(
-                exit_price=round(exit_price, 4),
+                exit_price=rounded_exit,
                 pnl_usd=calc_pnl_usd,
                 pnl_percent=calc_pnl_pct,
                 tx_hash=tx_hash,

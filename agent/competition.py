@@ -11,6 +11,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 from agent.config import config
+from agent.pricing import round_price
 from db.models import (
     close_trade,
     get_daily_trade_count,
@@ -159,7 +160,7 @@ async def force_close_stale_positions() -> int:
             )
             continue
         age = _age(trade)
-        await close_trade(trade.id, exit_price=round(current_price, 4))
+        await close_trade(trade.id, exit_price=round_price(current_price))
         pnl_pct = (current_price / trade.entry_price - 1) * 100
         logger.info(
             "[Competition] Force-closed stale trade id=%d  symbol=%s  age=%.1fh  pnl=%+.2f%%",

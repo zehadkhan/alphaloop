@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { CheckCircle2, AlertTriangle, Info, X, RefreshCw } from "lucide-react";
 import Header from "@/components/Header";
 import StatsRow from "@/components/StatsRow";
@@ -16,6 +16,7 @@ import CompetitionPanel from "@/components/CompetitionPanel";
 import TokenScannerPanel from "@/components/TokenScannerPanel";
 import TwakStatusCard from "@/components/TwakStatusCard";
 import GatesPanel from "@/components/GatesPanel";
+import BotStatusBar from "@/components/BotStatusBar";
 import type { Health, AgentStatus, Trade, Strategy, AgentRun, RunResult, CompetitionStatus, ActivityItem, BotConfig, TwakStatus } from "@/types";
 
 type Notification = {
@@ -70,6 +71,13 @@ export default function Dashboard() {
   const [running, setRunning]       = useState(false);
   const [monitoring, setMonitoring] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
+
+  const prevSnapshot = useRef<{
+    latestRunId: number | null;
+    latestRunError: string | null;
+    failedTradeCount: number;
+    minTradesMet: boolean | null;
+  }>({ latestRunId: null, latestRunError: null, failedTradeCount: 0, minTradesMet: null });
 
   const addNotif = useCallback((type: Notification["type"], title: string, message: string) => {
     const id = ++notifId;
@@ -139,6 +147,57 @@ export default function Dashboard() {
         setBotConfig(cfg.value as BotConfig);
       if (twak.status === "fulfilled" && !(twak.value as { error?: string }).error)
         setTwakStatus(twak.value as TwakStatus);
+
+      // Auto-alert on meaningful state changes (silent refresh only)
+      if (silent) {
+        const latestRun = (r.status === "fulfilled"
+          ? (r.value as { runs: AgentRun[] }).runs?.[0]
+          : null) ?? null;
+        const failedCount = tradesList.filter((t) => t.status === "failed").length;
+        const compData = comp.status === "fulfilled" && !(comp.value as { error?: string }).error
+          ? (comp.value as CompetitionStatus)
+          : null;
+        const prev = prevSnapshot.current;
+
+        if (latestRun && prev.latestRunId !== null && latestRun.id !== prev.latestRunId) {
+          if (latestRun.error_message && !latestRun.error_message.startsWith("skip:")) {
+            addNotif("error", `Run #${latestRun.id} failed`,
+              latestRun.error_message.slice(0, 120));
+          } else if (latestRun.trades_executed > 0) {
+            addNotif("success", `Run #${latestRun.id} traded`,
+              `${latestRun.trades_executed} swap(s) executed`);
+          } else if (latestRun.error_message?.startsWith("skip:")) {
+            const reason = latestRun.error_message.split(":")[1]?.replace(/_/g, " ") ?? "skipped";
+            addNotif("info", `Run #${latestRun.id} skipped`, reason);
+          }
+        }
+
+        if (failedCount > prev.failedTradeCount && prev.failedTradeCount > 0) {
+          addNotif("error", "Swap failed",
+            `${failedCount - prev.failedTradeCount} new failed trade(s) — check Trade History`);
+        }
+
+        if (compData && prev.minTradesMet === true && !compData.min_trades_met) {
+          addNotif("info", "New UTC day", "Daily trade quota reset — bot will force trade if needed");
+        }
+
+        prevSnapshot.current = {
+          latestRunId: latestRun?.id ?? prev.latestRunId,
+          latestRunError: latestRun?.error_message ?? null,
+          failedTradeCount: failedCount,
+          minTradesMet: compData?.min_trades_met ?? prev.minTradesMet,
+        };
+      } else if (r.status === "fulfilled") {
+        const latestRun = (r.value as { runs: AgentRun[] }).runs?.[0] ?? null;
+        prevSnapshot.current = {
+          latestRunId: latestRun?.id ?? null,
+          latestRunError: latestRun?.error_message ?? null,
+          failedTradeCount: tradesList.filter((t) => t.status === "failed").length,
+          minTradesMet: comp.status === "fulfilled"
+            ? (comp.value as CompetitionStatus).min_trades_met ?? null
+            : null,
+        };
+      }
 
       setLastRefresh(new Date());
     } catch { /* silently fail — UI shows stale data */ } finally {
@@ -274,6 +333,15 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* ── Bot status banner ─────────────────────────────────────────── */}
+        <BotStatusBar
+          status={status}
+          competition={competition}
+          runs={runs}
+          paused={botConfig?.paused ?? false}
+          backendOk={health?.status === "ok"}
+        />
+
         {/* ── Row 1: Stats ─────────────────────────────────────────────── */}
         <StatsRow
           trades={trades}
@@ -289,7 +357,7 @@ export default function Dashboard() {
           </div>
           <div className="space-y-5">
             {competition && <CompetitionPanel status={competition} agentStatus={status} />}
-            <GatesPanel />
+            <GatesPanel competitionMode={status?.competition_mode ?? false} />
             <TwakStatusCard status={twakStatus} />
             <TokenScannerPanel competitionMode={status?.competition_mode ?? false} />
           </div>

@@ -13,6 +13,8 @@ class Config:
     AGENT_PRIVATE_KEY: str = os.getenv("AGENT_PRIVATE_KEY", "")
     TRADING_PAIR: str = os.getenv("TRADING_PAIR", "ETH/USDT")
     MAX_POSITION_SIZE_USD: float = float(os.getenv("MAX_POSITION_SIZE_USD", "10"))
+    MIN_SWAP_USD: float = float(os.getenv("MIN_SWAP_USD", "1.0"))
+    MAX_POSITION_PCT_OF_PORTFOLIO: float = float(os.getenv("MAX_POSITION_PCT_OF_PORTFOLIO", "0.25"))
     STOP_LOSS_PERCENT: float = float(os.getenv("STOP_LOSS_PERCENT", "5"))
     ENVIRONMENT: str = os.getenv("ENVIRONMENT", "testnet")
     # DRY_RUN defaults True on testnet; set DRY_RUN=false to enable live execution
@@ -39,6 +41,7 @@ class Config:
         "LUNC",   # 1.2% transfer tax breaks 0x router (APPROVAL_SENT_SWAP_FAILED)
         "PENDLE", # Previously FAILED — unroutable on TWAK
         "FLOKI",  # Non-standard decimals, TWAK can't auto-detect
+        "DEXE",   # Repeated swap failures — no reliable TWAK route
     }
 
     ELIGIBLE_TOKENS: list[str] = [

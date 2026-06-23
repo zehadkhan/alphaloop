@@ -1,7 +1,7 @@
-import { ArrowUpRight, ArrowDownRight, Minus } from "lucide-react";
+import { ArrowUpRight, ArrowDownRight, Minus, ExternalLink } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { formatPrice, formatPct, timeAgo } from "@/lib/utils";
+import { formatPrice, formatPct, timeAgo, bscscanTxUrl, shortenHash } from "@/lib/utils";
 import type { Trade } from "@/types";
 
 type Props = {
@@ -41,7 +41,7 @@ export default function TradeHistory({ trades }: Props) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border-subtle">
-                  {["#", "Symbol", "Action", "Entry", "Exit", "PnL %", "Dur.", "Reason", "Status", "Time"].map(
+                  {["#", "Symbol", "Action", "Entry", "Exit", "PnL %", "Dur.", "Reason", "Tx", "Status", "Time"].map(
                     (h) => (
                       <th
                         key={h}
@@ -109,6 +109,26 @@ export default function TradeHistory({ trades }: Props) {
                             "bg-white/5 text-text-muted"
                           }`}>
                             {(trade as any).close_reason}
+                          </span>
+                        ) : (
+                          <span className="text-text-muted text-[11px]">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        {trade.tx_hash ? (
+                          <a
+                            href={bscscanTxUrl(trade.tx_hash)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-[11px] text-accent hover:text-accent/80 font-mono"
+                            title={trade.tx_hash}
+                          >
+                            {shortenHash(trade.tx_hash)}
+                            <ExternalLink size={10} />
+                          </a>
+                        ) : trade.status === "failed" ? (
+                          <span className="text-[10px] text-loss/80" title="Swap failed — no on-chain tx">
+                            failed
                           </span>
                         ) : (
                           <span className="text-text-muted text-[11px]">—</span>

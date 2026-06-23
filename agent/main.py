@@ -342,9 +342,9 @@ def _activity_item(run: AgentRun, strategies: list, trades: list) -> dict:
         parts = run.error_message.split(":")
         skip_reason = parts[1] if len(parts) > 1 else "unknown"
         skip_titles = {
-            "extreme_fear":     ("Gate blocked — Extreme Fear",
+            "extreme_fear":     ("Market caution — Extreme Fear",
                                  f"Fear & Greed = {parts[2] if len(parts) > 2 else '?'}/100. "
-                                 "Market in panic mode — bot skipped to avoid buying the dip of a freefall."),
+                                 "In competition mode the bot continues with 50% position size."),
             "extreme_greed":    ("Gate blocked — Extreme Greed",
                                  f"Fear & Greed = {parts[2] if len(parts) > 2 else '?'}/100. "
                                  "Market overheated — high risk of sharp reversal."),

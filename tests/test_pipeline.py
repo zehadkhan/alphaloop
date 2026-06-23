@@ -428,6 +428,40 @@ def test_compute_pnl_sell():
     assert abs(pnl_pct - 5.0) < 0.001, f"Expected 5.0, got {pnl_pct}"
 
 
+@run_test("Pricing — round_price preserves micro-cap values")
+def test_round_price_microcap():
+    from agent.pricing import round_price
+
+    floki_exit = round_price(0.00002585)
+    assert floki_exit > 0, f"FLOKI exit rounded to zero: {floki_exit}"
+    assert floki_exit == 0.00002585
+
+    normal = round_price(612.5678)
+    assert normal == 612.5678
+
+
+@run_test("TWAK — _extract_tx_hash finds nested hash")
+def test_extract_tx_hash():
+    from execution.twak_executor import _extract_tx_hash
+
+    h = "0x" + "a" * 64
+    assert _extract_tx_hash({"result": {"txHash": h}}) == h
+    assert _extract_tx_hash({"receipt": {"transactionHash": h}}) == h
+    assert _extract_tx_hash({"foo": "bar"}) is None
+
+
+@run_test("BSC addresses — eligible tokens have hard map or known symbols")
+def test_bsc_address_map():
+    from data.bsc_token_addresses import get_bsc_address
+    from agent.config import config
+
+    mapped = 0
+    for sym in config.ELIGIBLE_TOKENS:
+        if get_bsc_address(sym):
+            mapped += 1
+    assert mapped >= 40, f"Only {mapped} tokens hard-mapped"
+
+
 @run_test("Scheduler — _ohlcv_to_dataframe shape and index")
 def test_ohlcv_to_dataframe():
     from agent.scheduler import _ohlcv_to_dataframe
@@ -526,6 +560,9 @@ async def main() -> None:
         # Scheduler helpers
         test_compute_pnl_buy,
         test_compute_pnl_sell,
+        test_round_price_microcap,
+        test_extract_tx_hash,
+        test_bsc_address_map,
         test_ohlcv_to_dataframe,
         # External APIs
         test_cmc_quote,
