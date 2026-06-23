@@ -61,6 +61,9 @@ services:
     build:
       context: ./dashboard
       dockerfile: Dockerfile
+      args:
+        NODE_ENV: development
+        NPM_CONFIG_PRODUCTION: "false"
     container_name: alphaloop-dashboard
     expose:
       - '3001'
