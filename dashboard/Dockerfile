@@ -1,19 +1,22 @@
-FROM node:20-alpine AS base
+FROM node:20-slim AS base
 WORKDIR /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates wget \
+    && rm -rf /var/lib/apt/lists/*
 
 # ── Stage 1: install dependencies ───────────────────────────────────────────
 FROM base AS deps
-# Coolify/Docker often set NODE_ENV=production globally, which skips devDependencies
-# (typescript, @types/*) required for `next build`.
+# Coolify injects build-args (often NODE_ENV=production) — force dev deps for build.
 ENV NODE_ENV=development
+ENV NPM_CONFIG_PRODUCTION=false
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN npm ci --no-audit --no-fund
 
 # ── Stage 2: build ──────────────────────────────────────────────────────────
 FROM base AS builder
 ENV NODE_ENV=development
+ENV NPM_CONFIG_PRODUCTION=false
 ENV NEXT_TELEMETRY_DISABLED=1
-# Next.js production build can be memory-heavy on small VPS instances
 ENV NODE_OPTIONS=--max-old-space-size=2048
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -23,8 +26,6 @@ RUN npm run build
 FROM base AS runner
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
-
-# next start reads PORT and HOSTNAME automatically
 ENV PORT=3001
 ENV HOSTNAME=0.0.0.0
 
