@@ -11,15 +11,18 @@ ENV NODE_OPTIONS=--max-old-space-size=2048
 ENV PORT=3001
 ENV HOSTNAME=0.0.0.0
 
-# package.json only — avoid lockfile platform mismatches on the VPS builder
-COPY package.json .npmrc ./
+COPY package.json package-lock.json .npmrc ./
 
 # Inline env beats Coolify-injected NODE_ENV=production build-args
-RUN NODE_ENV=development NPM_CONFIG_PRODUCTION=false npm install --no-audit --no-fund --legacy-peer-deps
+RUN NODE_ENV=development NPM_CONFIG_PRODUCTION=false npm ci --no-audit --no-fund --legacy-peer-deps
 
 COPY . .
 
+ENV GENERATE_SOURCEMAP=false
+ENV NEXT_PRIVATE_WORKER_COUNT=1
+
 RUN NODE_ENV=development NPM_CONFIG_PRODUCTION=false npm run build \
+    && mkdir -p .next/standalone/.next \
     && cp -r .next/static .next/standalone/.next/static
 
 ENV NODE_ENV=production
