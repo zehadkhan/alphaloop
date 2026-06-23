@@ -27,4 +27,8 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/.next ./.next
 
 EXPOSE 3001
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+  CMD wget -qO /dev/null http://localhost:3001/ || exit 1
+
 CMD ["node_modules/.bin/next", "start"]
