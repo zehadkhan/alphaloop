@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle2, SkipForward, Clock } from "lucide-react";
+import { AlertCircle, CheckCircle2, SkipForward, Clock, ShieldOff } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { formatDuration, timeAgo } from "@/lib/utils";
 import type { AgentRun } from "@/types";
@@ -7,7 +7,41 @@ type Props = {
   runs: AgentRun[];
 };
 
+const SKIP_LABELS: Record<string, string> = {
+  extreme_fear:     "Gate: Extreme Fear",
+  extreme_greed:    "Gate: Extreme Greed",
+  btc_downtrend:    "Gate: BTC Downtrend",
+  token_weak_7d:    "Gate: Token Weak 7d",
+  unroutable_token: "Gate: No Route",
+  HOLD:             "Claude: HOLD",
+  low_confidence:   "Low Confidence",
+  backtest_failed:  "Backtest Failed",
+  risk_off_regime:  "Risk-Off Regime",
+  max_positions_reached: "Max Positions",
+  token_already_held:    "Already Held",
+  ohlcv_unavailable:     "Data Unavailable",
+  unreliable_data:       "Unreliable Data",
+};
+
+function parseSkipReason(msg: string): { label: string; detail: string } | null {
+  if (!msg.startsWith("skip:")) return null;
+  const parts = msg.split(":");
+  const key   = parts[1] ?? "unknown";
+  const label = SKIP_LABELS[key] ?? `Skipped: ${key}`;
+  const extra = parts.slice(2).join(":");
+  let detail  = "";
+  if (key === "extreme_fear")    detail = `F&G = ${extra}/100`;
+  else if (key === "extreme_greed")   detail = `F&G = ${extra}/100`;
+  else if (key === "btc_downtrend")   detail = `BTC 80h: ${extra}%`;
+  else if (key === "token_weak_7d")   detail = `${parts[2]} 7d: ${parts[3]}%`;
+  else if (key === "unroutable_token") detail = parts[2] ?? "";
+  return { label, detail };
+}
+
 function RunStatusIcon({ run }: { run: AgentRun }) {
+  if (run.error_message?.startsWith("skip:")) {
+    return <ShieldOff size={14} className="text-orange-400 shrink-0" />;
+  }
   if (run.error_message) {
     return <AlertCircle size={14} className="text-loss shrink-0" />;
   }
@@ -21,11 +55,14 @@ function RunStatusIcon({ run }: { run: AgentRun }) {
 }
 
 function RunRow({ run }: { run: AgentRun }) {
-  const hasError = !!run.error_message;
+  const skip     = run.error_message ? parseSkipReason(run.error_message) : null;
+  const hasError = !!run.error_message && !skip;
   const isRunning = !run.completed_at;
-  const wasSkipped = !hasError && !isRunning && run.trades_executed === 0;
+  const wasSkipped = !hasError && !skip && !isRunning && run.trades_executed === 0;
 
-  const statusColor = hasError
+  const statusColor = skip
+    ? "text-orange-400"
+    : hasError
     ? "text-loss"
     : isRunning
     ? "text-accent"
@@ -33,13 +70,8 @@ function RunRow({ run }: { run: AgentRun }) {
     ? "text-text-muted"
     : "text-profit";
 
-  const statusLabel = hasError
-    ? "Error"
-    : isRunning
-    ? "Running"
-    : wasSkipped
-    ? "Skipped"
-    : "Completed";
+  const statusLabel = skip?.label
+    ?? (hasError ? "Error" : isRunning ? "Running" : wasSkipped ? "Skipped" : "Completed");
 
   return (
     <div className="flex items-start gap-3 py-3 border-b border-border-subtle/50 last:border-0 hover:bg-surface-2/50 px-2 -mx-2 rounded-lg transition-colors">
@@ -78,7 +110,11 @@ function RunRow({ run }: { run: AgentRun }) {
           )}
         </div>
 
-        {run.error_message && (
+        {skip?.detail && (
+          <p className="mt-1 text-xs text-orange-400/70">{skip.detail}</p>
+        )}
+
+        {hasError && run.error_message && (
           <p className="mt-1.5 text-xs text-loss bg-loss/10 rounded px-2 py-1 break-all">
             {run.error_message.length > 120
               ? run.error_message.slice(0, 120) + "…"
