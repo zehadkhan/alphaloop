@@ -618,6 +618,16 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
         if strategy["action"] == "BUY":
             token_in, token_out = quote, base
         else:
+            # SELL on a DEX = closing an existing long position.
+            # If we have no open BUY position for this token, we can't short it.
+            has_long = any(t.symbol == symbol and t.action == "BUY" for t in open_trades)
+            if not has_long:
+                logger.info(
+                    "SELL signal for %s but no open long position — cannot short on DEX, skipping",
+                    symbol,
+                )
+                await _finish_run(run.id, strategies_generated, 0, 0.0, None)
+                return _result("skipped", run.id, reason="no_long_to_sell", symbol=symbol)
             token_in, token_out = base, quote
 
         # Position sizing: confidence × compass regime × drawdown zone
