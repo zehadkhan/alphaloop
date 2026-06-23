@@ -45,12 +45,17 @@ AlphaLoop uses Claude AI to generate, backtest, and autonomously execute crypto 
 ## What the Agent Does Every 30 Minutes
 
 1. **Scans eligible tokens** — momentum scorer with hysteresis (avoids constant switching)
-2. **Computes 5-Axis Market Compass** — Trend / Momentum / Sentiment / Volatility / Stress (0–50 score)
-3. **Generates strategy via Claude** — full compass state sent in prompt, Claude reasons about regime
-4. **Checks Edge Gate** — `confidence × (momentum / 10) − 0.8% > 0` — skips low-value trades
-5. **Runs walk-forward backtest** — 45-day in-sample + 15-day out-of-sample, rejects if it fails
-6. **Executes swap via TWAK** — position sized by compass regime × drawdown zone multiplier
-7. **Commits proof to BSC** — SHA-256 of decision stored as calldata before trade executes
+2. **Market quality gates** — 3 hard gates checked before spending any API budget:
+   - Gate 1: Fear & Greed 25–85 (skip extreme panic or bubble)
+   - Gate 2: BTC 80h uptrend (skip if BTC in heavy downtrend — altcoins follow)
+   - Gate 3: Token 7-day change > −20% (skip falling-knife tokens)
+3. **Pre-flight route check** — calls TWAK `get_swap_quote` before any swap to verify the token is routable on BSC; auto-blacklists unroutable tokens permanently
+4. **Computes 5-Axis Market Compass** — Trend / Momentum / Sentiment / Volatility / Stress (0–50 score)
+5. **Generates strategy via Claude** — full compass + sentiment state sent in prompt, Claude reasons about regime
+6. **Checks Edge Gate** — `confidence × (momentum / 10) − 0.8% > 0` — skips low-value trades
+7. **Runs walk-forward backtest** — 45-day in-sample + 15-day out-of-sample, rejects if it fails
+8. **Executes swap via TWAK** — position sized by compass regime × drawdown zone multiplier
+9. **Commits proof to BSC** — SHA-256 of decision stored as calldata before trade executes
 
 ---
 
@@ -89,6 +94,8 @@ AlphaLoop's core regime detection engine. Each axis scores 0–10 independently:
 | HALT | ≥ 25% | 0% | No new trades (DQ at 30%) |
 
 Additional guards every cycle:
+- **Market quality gates** — Fear & Greed, BTC trend, token 7-day change checked before every cycle
+- **Token auto-blacklist** — any token that fails route check or swap is permanently blacklisted (persisted to `storage/token_blacklist.json`)
 - **Daily loss cap** — pause if loss > $50/day
 - **Stale position force-close** — auto-close if open > 20h
 - **Smart compliance window** — soft 18h UTC, alert 22h, hard close 23h
@@ -170,7 +177,8 @@ SQLite ──▶ trade + strategy + proof_string + proof_hash + run saved
 | Execution | TWAK REST API | Self-custody swap via Trust Wallet Agent Kit |
 | Database | SQLAlchemy 2.0 + aiosqlite | Async SQLite ORM |
 | Dashboard | Next.js 14 | Live chart, compass bar, drawdown zone, equity curve |
-| Infrastructure | Coolify + Docker on VPS | Auto-deploy, 3-container stack |
+| Infrastructure | Coolify + Docker on VPS | Auto-deploy, 3-container stack, zero-downtime rolling updates |
+| Health checks | Dockerfile HEALTHCHECK + compose | curl /health (backend), wget (dashboard), node http.get (twak) |
 
 ---
 
@@ -183,7 +191,8 @@ SQLite ──▶ trade + strategy + proof_string + proof_hash + run saved
 | GET | `/trades` | All executed trades |
 | GET | `/strategies` | All generated strategies |
 | GET | `/runs` | Agent run history |
-| GET | `/activity` | Plain-English cycle summaries |
+| GET | `/activity` | Plain-English cycle summaries with gate skip reasons |
+| GET | `/gates` | Live Fear & Greed, BTC trend, blacklist, gate pass/fail |
 | POST | `/run` | Trigger one cycle manually |
 | POST | `/monitor` | Check TP/SL on open positions |
 | GET | `/competition/status` | Drawdown zone, daily trades, stale positions |
@@ -193,6 +202,8 @@ SQLite ──▶ trade + strategy + proof_string + proof_hash + run saved
 | GET | `/admin/config` | Runtime config |
 | POST | `/admin/config` | Update config (pause, position size, etc.) |
 | POST | `/admin/close-all` | Emergency close all positions |
+| POST | `/admin/close/{id}` | Close a specific position at market price |
+| POST | `/admin/sell-tokens` | Sell all non-BNB wallet balances back to BNB |
 
 ---
 
@@ -211,7 +222,8 @@ alphaloop/
 │   ├── cmc_client.py          — CMC Pro API client (quotes, OHLCV, global metrics)
 │   ├── indicators.py          — RSI, MACD, BB, SMA, EMA, ATR
 │   ├── token_scanner.py       — hysteresis-aware momentum token ranking
-│   └── regime.py              — 5-Axis Market Compass engine
+│   ├── regime.py              — 5-Axis Market Compass engine
+│   └── sentiment.py           — Fear & Greed index + BTC 4h trend + token 7d change
 │
 ├── strategy/
 │   ├── generator.py           — Claude strategy generation with compass context
@@ -227,7 +239,13 @@ alphaloop/
 │
 ├── dashboard/                 — Next.js 14 live dashboard
 │   └── components/
-│       └── CompetitionPanel.tsx — drawdown zone badge + compass bar
+│       ├── ActivityFeed.tsx     — plain-English cycle log with gate skip reasons
+│       ├── GatesPanel.tsx       — live Fear & Greed + BTC trend + blacklist + TRADE ALLOWED badge
+│       ├── CompetitionPanel.tsx — drawdown zone badge + compass bar
+│       ├── OpenPositions.tsx    — live P&L for open trades
+│       ├── EquityCurve.tsx      — cumulative P&L chart
+│       ├── TokenScannerPanel.tsx — top tokens with momentum scores
+│       └── AdminPanel.tsx       — pause, position size, emergency controls
 │
 ├── scripts/
 │   ├── start_competition.sh   — one-command local launch
