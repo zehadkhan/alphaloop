@@ -607,6 +607,63 @@ async def admin_close_all(x_admin_password: str = Header(default="")) -> dict:
     return {"closed": closed, "total": len(open_trades), "errors": errors}
 
 
+@app.post("/admin/sell-tokens", tags=["admin"])
+async def admin_sell_tokens(x_admin_password: str = Header(default="")) -> dict:
+    """Sell all non-BNB token balances in the TWAK wallet back to BNB."""
+    _check_admin_password(x_admin_password)
+    if not config.TWAK_REST_URL:
+        raise HTTPException(status_code=503, detail="TWAK not configured")
+
+    from execution.twak_executor import TWAKExecutor, _resolve_bsc_token
+    import httpx as _httpx
+
+    wallet = "0xa401A91faa968Ee4334780712C95Af208E570e0F"
+    rpc    = "https://bsc-dataseed.binance.org/"
+
+    # Check symbols from open trades + common stuck tokens
+    all_trades = await list_open_buy_trades()
+    check_symbols = {t.symbol for t in all_trades}
+    check_symbols |= {"AXS", "ZIL", "DEXE", "LUNC", "ETH", "FLOKI", "ROSE",
+                      "ADA", "LINK", "DOT", "AVAX", "ATOM", "DOGE", "SHIB"}
+    check_symbols -= {"BNB", "USDT", "USDC", "BUSD"}
+
+    async def _bsc_balance(contract: str, decimals: int = 18) -> float:
+        data = "0x70a08231" + "000000000000000000000000" + wallet[2:].lower()
+        try:
+            async with _httpx.AsyncClient(timeout=8) as c:
+                r = await c.post(rpc, json={"jsonrpc": "2.0", "method": "eth_call",
+                    "params": [{"to": contract, "data": data}, "latest"], "id": 1})
+            result = r.json().get("result", "0x0")
+            return int(result, 16) / 10**decimals
+        except Exception:
+            return 0.0
+
+    sold     = []
+    errors   = []
+    executor = TWAKExecutor()
+
+    for sym in sorted(check_symbols):
+        try:
+            contract = await _resolve_bsc_token(sym)
+            if contract == sym:
+                continue  # couldn't resolve BSC address
+            bal = await _bsc_balance(contract)
+            if bal < 1e-8:
+                continue
+            logger.info("[SellAll] %s balance=%.6f — selling", sym, bal)
+            swap = await executor.swap(sym, "BNB", bal * 0.999)
+            bnb  = swap.get("amount_out", 0.0)
+            sold.append({"symbol": sym, "amount": round(bal, 6),
+                         "bnb_received": round(bnb, 6), "tx_hash": swap.get("tx_hash")})
+        except Exception as exc:
+            errors.append({"symbol": sym, "error": str(exc)})
+            logger.warning("[SellAll] %s: %s", sym, exc)
+
+    total_bnb = sum(s["bnb_received"] for s in sold)
+    return {"sold": sold, "total_bnb": round(total_bnb, 6),
+            "total_usd": round(total_bnb * 573, 2), "errors": errors}
+
+
 @app.post("/competition/scan", tags=["competition"])
 async def competition_scan() -> dict:
     """Run the full 149-token scanner and return ranked results."""

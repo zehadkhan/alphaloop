@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Pause, Play, X, Save, AlertTriangle, Settings, Brain, DollarSign, Target, Zap, Timer, Lock } from "lucide-react";
+import { Pause, Play, X, Save, AlertTriangle, Settings, Brain, DollarSign, Target, Zap, Timer, Lock, TrendingDown } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import type { BotConfig } from "@/types";
 
@@ -19,6 +19,8 @@ export default function AdminPanel({ config, onUpdate }: Props) {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [closing, setClosing] = useState(false);
+  const [selling, setSelling] = useState(false);
+  const [sellResult, setSellResult] = useState<{sold: {symbol:string,bnb_received:number}[], total_bnb:number, total_usd:number} | null>(null);
   const [toggling, setToggling] = useState(false);
   const [saved, setSaved] = useState(false);
   const [password, setPassword] = useState("");
@@ -77,6 +79,22 @@ export default function AdminPanel({ config, onUpdate }: Props) {
       onUpdate();
     } finally {
       setToggling(false);
+    }
+  };
+
+  const handleSellAll = async () => {
+    if (!confirm("Sell ALL token balances in wallet back to BNB? This executes real on-chain swaps.")) return;
+    setSelling(true);
+    setSellResult(null);
+    setAuthError(false);
+    try {
+      const res = await fetch("/api/proxy/admin/sell-tokens", { method: "POST", headers: adminHeaders() });
+      if (res.status === 401) { setAuthError(true); setSelling(false); return; }
+      const data = await res.json();
+      setSellResult(data);
+      onUpdate();
+    } finally {
+      setSelling(false);
     }
   };
 
@@ -310,21 +328,58 @@ export default function AdminPanel({ config, onUpdate }: Props) {
                 {saving ? "Saving…" : saved ? "Saved!" : "Save Changes"}
               </button>
 
-              {/* Emergency close all */}
-              <section className="border-t border-border-subtle pt-5">
+              {/* Emergency section */}
+              <section className="border-t border-border-subtle pt-5 space-y-3">
                 <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3 flex items-center gap-1.5">
                   <AlertTriangle size={12} className="text-loss" /> Emergency
                 </h3>
+
+                {/* Sell all tokens → BNB */}
+                <button
+                  onClick={handleSellAll}
+                  disabled={selling}
+                  className="w-full flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-sm bg-amber-500/10 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20 transition-all"
+                >
+                  <TrendingDown size={15} />
+                  {selling ? "Selling tokens…" : "Sell All Tokens → BNB"}
+                </button>
+                <p className="text-xs text-text-muted text-center">
+                  Checks wallet for any stuck tokens and sells them on-chain
+                </p>
+
+                {/* Sell result */}
+                {sellResult && (
+                  <div className="rounded-xl border border-border-subtle bg-surface-2 p-3 text-xs space-y-1">
+                    {sellResult.sold.length === 0 ? (
+                      <p className="text-text-muted text-center">No tokens found to sell</p>
+                    ) : (
+                      <>
+                        {sellResult.sold.map(s => (
+                          <div key={s.symbol} className="flex justify-between text-text-primary">
+                            <span>{s.symbol}</span>
+                            <span className="text-profit">+{s.bnb_received.toFixed(6)} BNB</span>
+                          </div>
+                        ))}
+                        <div className="flex justify-between font-semibold border-t border-border-subtle pt-1 mt-1">
+                          <span>Total</span>
+                          <span className="text-profit">{sellResult.total_bnb.toFixed(6)} BNB (${sellResult.total_usd.toFixed(2)})</span>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {/* Close all DB positions */}
                 <button
                   onClick={handleCloseAll}
                   disabled={closing}
                   className="w-full flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-sm bg-loss/10 text-loss border border-loss/30 hover:bg-loss/20 transition-all"
                 >
                   <X size={15} />
-                  {closing ? "Closing…" : "Close All Open Positions"}
+                  {closing ? "Closing…" : "Close All Open Positions (DB)"}
                 </button>
-                <p className="mt-1.5 text-xs text-text-muted text-center">
-                  Sells everything at current market price immediately
+                <p className="text-xs text-text-muted text-center">
+                  Marks open trades as closed in database only
                 </p>
               </section>
 
