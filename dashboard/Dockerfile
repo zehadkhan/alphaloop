@@ -9,8 +9,8 @@ FROM base AS deps
 # Coolify injects build-args (often NODE_ENV=production) — force dev deps for build.
 ENV NODE_ENV=development
 ENV NPM_CONFIG_PRODUCTION=false
-COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund
+COPY package.json package-lock.json* ./
+RUN npm install --no-audit --no-fund
 
 # ── Stage 2: build ──────────────────────────────────────────────────────────
 FROM base AS builder
