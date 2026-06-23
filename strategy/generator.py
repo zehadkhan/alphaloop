@@ -19,7 +19,9 @@ MODEL = "claude-sonnet-4-6"
 _SYSTEM_PROMPT = (
     "You are a quantitative trading strategy analyst. "
     "Given market data and technical indicators, generate a clear trading strategy. "
-    "Always respond in valid JSON only."
+    "CRITICAL: Your entire response must be a single valid JSON object. "
+    "Start your response with '{' and end with '}'. "
+    "No markdown, no code blocks, no explanation text — only the raw JSON object."
 )
 
 _USER_PROMPT_TEMPLATE = """\
@@ -282,17 +284,13 @@ class StrategyGenerator:
                 "cache_control": {"type": "ephemeral"},
             }
         ]
-        prefill = "{"
         try:
             message = await self._client.messages.create(
                 model=MODEL,
                 max_tokens=512,
                 temperature=0.2,
                 system=system,
-                messages=[
-                    {"role": "user", "content": user_prompt},
-                    {"role": "assistant", "content": prefill},
-                ],
+                messages=[{"role": "user", "content": user_prompt}],
             )
         except anthropic.APIStatusError as exc:
             raise StrategyGeneratorError(
@@ -301,7 +299,7 @@ class StrategyGenerator:
         except anthropic.APIConnectionError as exc:
             raise StrategyGeneratorError(f"Network error: {exc}") from exc
 
-        raw = prefill + message.content[0].text
+        raw = message.content[0].text
         logger.debug(
             "Claude response: input_tokens=%d output_tokens=%d cache_read=%d",
             message.usage.input_tokens,
@@ -311,14 +309,29 @@ class StrategyGenerator:
         return raw
 
     def _parse_and_validate(self, raw: str) -> dict:
+        # Strip markdown code fences
         cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", raw).strip()
 
+        # Try direct parse first
+        strategy: dict | None = None
         try:
-            strategy: dict = json.loads(cleaned)
-        except json.JSONDecodeError as exc:
+            strategy = json.loads(cleaned)
+        except json.JSONDecodeError:
+            pass
+
+        # Fallback: extract first {...} block (handles leading analysis text)
+        if strategy is None:
+            match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+            if match:
+                try:
+                    strategy = json.loads(match.group())
+                except json.JSONDecodeError:
+                    pass
+
+        if strategy is None:
             raise StrategyGeneratorError(
-                f"Response is not valid JSON: {exc}\nRaw: {raw[:400]}"
-            ) from exc
+                f"Response is not valid JSON.\nRaw: {raw[:400]}"
+            )
 
         # Type-coerce numeric fields — model occasionally returns strings
         for field in ("confidence", "entry_price", "stop_loss", "take_profit"):
