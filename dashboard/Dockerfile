@@ -3,14 +3,20 @@ WORKDIR /app
 
 # ── Stage 1: install dependencies ───────────────────────────────────────────
 FROM base AS deps
-COPY package.json package-lock.json* ./
-RUN npm install
+# Coolify/Docker often set NODE_ENV=production globally, which skips devDependencies
+# (typescript, @types/*) required for `next build`.
+ENV NODE_ENV=development
+COPY package.json package-lock.json ./
+RUN npm ci
 
 # ── Stage 2: build ──────────────────────────────────────────────────────────
 FROM base AS builder
+ENV NODE_ENV=development
+ENV NEXT_TELEMETRY_DISABLED=1
+# Next.js production build can be memory-heavy on small VPS instances
+ENV NODE_OPTIONS=--max-old-space-size=2048
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
 # ── Stage 3: production runner ──────────────────────────────────────────────
