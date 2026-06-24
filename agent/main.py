@@ -634,6 +634,20 @@ async def admin_close_all(x_admin_password: str = Header(default="")) -> dict:
     return {"closed": closed, "total": len(open_trades), "errors": errors}
 
 
+@app.post("/admin/reset-blacklist", tags=["admin"])
+async def admin_reset_blacklist(x_admin_password: str = Header(default="")) -> dict:
+    """Clear persisted token blacklist so routable tokens can be retried."""
+    _check_admin_password(x_admin_password)
+    from agent.blacklist import reset_persisted_blacklist
+    removed = reset_persisted_blacklist()
+    return {
+        "ok": True,
+        "removed": removed,
+        "blacklist_size": len(config.TWAK_BLACKLIST),
+        "blacklist": sorted(config.TWAK_BLACKLIST),
+    }
+
+
 @app.post("/admin/sell-tokens", tags=["admin"])
 async def admin_sell_tokens(x_admin_password: str = Header(default="")) -> dict:
     """Sell all non-BNB token balances in the TWAK wallet back to BNB."""

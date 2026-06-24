@@ -65,43 +65,7 @@ _cycle_lock = asyncio.Lock()
 # Last computed compass — exposed via /status endpoint
 _last_compass: dict | None = None
 
-# ---------------------------------------------------------------------------
-# Runtime token blacklist (persisted to storage/token_blacklist.json)
-# ---------------------------------------------------------------------------
-
-_BLACKLIST_PATH = os.path.join(os.path.dirname(__file__), "..", "storage", "token_blacklist.json")
-
-
-def _load_persisted_blacklist() -> None:
-    """Merge storage/token_blacklist.json into config.TWAK_BLACKLIST at startup."""
-    try:
-        if os.path.exists(_BLACKLIST_PATH):
-            extra = json.loads(open(_BLACKLIST_PATH).read())
-            config.TWAK_BLACKLIST.update(extra)
-            if extra:
-                logger.info("[Blacklist] Loaded %d persisted tokens: %s", len(extra), extra)
-    except Exception as exc:
-        logger.warning("[Blacklist] Could not load persisted blacklist: %s", exc)
-
-
-def _auto_blacklist(symbol: str, reason: str) -> None:
-    """Add symbol to runtime + persisted blacklist."""
-    if symbol in config.TWAK_BLACKLIST:
-        return
-    config.TWAK_BLACKLIST.add(symbol)
-    logger.warning("[Blacklist] AUTO-BLACKLISTED %s — %s", symbol, reason)
-    try:
-        os.makedirs(os.path.dirname(_BLACKLIST_PATH), exist_ok=True)
-        existing: list = json.loads(open(_BLACKLIST_PATH).read()) if os.path.exists(_BLACKLIST_PATH) else []
-        if symbol not in existing:
-            existing.append(symbol)
-            with open(_BLACKLIST_PATH, "w") as f:
-                json.dump(existing, f, indent=2)
-    except Exception as exc:
-        logger.warning("[Blacklist] Could not persist blacklist: %s", exc)
-
-
-# ---------------------------------------------------------------------------
+from agent.blacklist import auto_blacklist, load_persisted_blacklist
 # Trade lifecycle monitor
 # ---------------------------------------------------------------------------
 
@@ -336,7 +300,7 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
 
     symbol, route_reason, route_failures = await pick_routable_symbol(candidates, action="BUY")
     for sym, err in route_failures:
-        _auto_blacklist(sym, err)
+        auto_blacklist(sym, err)
     if not symbol:
         logger.warning("[RouteCheck] No routable token in %d candidates — skipping", len(candidates))
         return _result("skipped", 0, reason="unroutable_token", error=route_reason)
@@ -778,7 +742,7 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
         if config.TWAK_REST_URL and hasattr(executor, "test_route"):
             route_ok, route_err = await executor.test_route(base, action=strategy["action"])
             if not route_ok:
-                _auto_blacklist(symbol, route_err)
+                auto_blacklist(symbol, route_err)
                 logger.warning("[RouteCheck] %s unroutable at execution — blacklisted.", symbol)
                 await _finish_run(run.id, strategies_generated, 0, 0.0, f"skip:unroutable_token:{symbol}")
                 return _result("skipped", run.id, reason="unroutable_token",
@@ -797,7 +761,7 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
                 "no route", "NO_ROUTE", "No route",
             )
             if any(sig in err_msg for sig in unroutable_signals):
-                _auto_blacklist(symbol, err_msg[:120])
+                auto_blacklist(symbol, err_msg[:120])
             await create_trade({
                 "strategy_id": db_strategy.id,
                 "symbol":      symbol,
@@ -912,7 +876,7 @@ async def _take_performance_snapshot() -> None:
 
 def start_scheduler(interval_minutes: int = 15) -> None:
     from datetime import datetime, timezone, timedelta
-    _load_persisted_blacklist()
+    load_persisted_blacklist()
     first_run = datetime.now(timezone.utc) + timedelta(seconds=30)
 
     scheduler.add_job(
