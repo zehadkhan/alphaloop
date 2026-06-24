@@ -246,20 +246,31 @@ class TWAKExecutor:
             return price
         raise TWAKExecutorError(f"Cannot price {token_in}/{token_out} — TWAK failed and no fallback")
 
-    async def test_route(self, token: str, quote: str = "BNB") -> tuple[bool, str]:
-        """Check if TWAK can route token↔quote without executing anything.
+    async def test_route(
+        self,
+        token: str,
+        quote: str = "BNB",
+        *,
+        action: str = "BUY",
+    ) -> tuple[bool, str]:
+        """Check if TWAK can route a swap without executing anything.
 
+        For BUY (default), tests BNB → token — the direction competition entries use.
         Returns (True, "") if routable, (False, reason) otherwise.
-        Uses get_swap_quote with a tiny amount — no gas, no on-chain tx.
         """
         try:
-            resolved = await _resolve_bsc_token(token.upper())
+            token = token.upper()
+            resolved = await _resolve_bsc_token(token)
+            if action.upper() == "BUY":
+                from_token, to_token, amount = quote, resolved, "0.001"
+            else:
+                from_token, to_token, amount = resolved, quote, "0.001"
             data = await self._call("get_swap_quote", {
                 "fromChain": _get_chain(),
-                "fromToken": resolved,
+                "fromToken": from_token,
                 "toChain":   _get_chain(),
-                "toToken":   quote,
-                "amount":    "0.001",
+                "toToken":   to_token,
+                "amount":    amount,
             })
             out = float(data.get("toAmount") or data.get("estimatedOutput") or "0")
             if out > 0:

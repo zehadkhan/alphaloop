@@ -29,6 +29,7 @@ from agent.competition import (
 )
 from agent.portfolio import cap_position_usd
 from agent.pricing import round_price
+from agent.routing import build_candidate_symbols, pick_routable_symbol
 from agent.proof import build_proof, commit_proof_onchain
 from data.token_scanner import TokenScanner
 from db.models import (
@@ -197,7 +198,11 @@ async def monitor_open_trades() -> dict:
                     from execution.twak_executor import TWAKExecutor
                     sell_executor = TWAKExecutor()
                     # Estimate current token value in USD
-                    sell_value_usd = round(current_price * (trade.amount_usd / trade.entry_price), 4)
+                    sell_value_usd = (
+                        round(current_price * (trade.amount_usd / trade.entry_price), 4)
+                        if trade.entry_price and trade.entry_price > 0
+                        else round(trade.amount_usd, 4)
+                    )
                     sell_value_usd = max(sell_value_usd, 0.01)
                     logger.info(
                         "[Monitor] Executing SELL swap: %s → BNB  ~$%.2f  reason=%s",
@@ -223,9 +228,11 @@ async def monitor_open_trades() -> dict:
                 tx_hash=sell_tx_hash,
                 close_reason=close_reason,
             )
-            pnl_pct = (actual_exit_price / trade.entry_price - 1) * 100
-            if trade.action == "SELL":
-                pnl_pct = -pnl_pct
+            pnl_pct = 0.0
+            if trade.entry_price and trade.entry_price > 0:
+                pnl_pct = (actual_exit_price / trade.entry_price - 1) * 100
+                if trade.action == "SELL":
+                    pnl_pct = -pnl_pct
             logger.info(
                 "[Monitor] Closed trade id=%d  reason=%s  entry=%.4f → exit=%.4f  pnl=%+.2f%%",
                 trade.id, close_reason, trade.entry_price, actual_exit_price, pnl_pct,
@@ -294,24 +301,45 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
         top_tokens = [{"symbol": default, "score": 0.5}]
 
     # Determine which tokens we can trade this cycle
-    # (filter out tokens we already have an open position in)
     open_trades = await list_open_trades()
     open_symbols = {t.symbol for t in open_trades}
     open_count   = len(open_trades)
 
-    # Pick first available Binance-listed token from top scan results
-    # (DexScreener-only tokens can't run the full CMC+indicator pipeline)
-    default_symbol = config.TRADING_PAIR.split("/")[0].upper()
-    symbol = default_symbol
-    for candidate in top_tokens:
-        if (candidate["symbol"] not in open_symbols
-                and candidate.get("data_source", "binance") != "dexscreener"):
-            symbol = candidate["symbol"]
-            break
-    # Fallback: if ALL top tokens are dexscreener or held, use default
-    if symbol == default_symbol and default_symbol in open_symbols:
-        logger.info("Position guard: all candidates held or dex-only — skipping")
+    # Daily trade quota — checked early so symbol selection can prioritize routable staples
+    _force_execute    = False
+    _compliance_mode  = "normal"
+    _fear_size_mult   = 1.0
+    if config.COMPETITION_MODE:
+        now          = datetime.now(timezone.utc)
+        in_window    = COMPETITION_START <= now <= COMPETITION_END
+        trades_today = await get_daily_trade_count()
+        utc_hour     = now.hour
+        if in_window and trades_today == 0:
+            _force_execute   = True
+            _compliance_mode = "alert"
+            logger.warning(
+                "[Compliance] Daily trade quota (0 today) — forcing entry, bypassing gates",
+            )
+            if utc_hour >= 23:
+                _compliance_mode = "hard"
+                logger.warning(
+                    "[Compliance] HARD window (hour=%d UTC) — last-chance force trade",
+                    utc_hour,
+                )
+
+    candidates = build_candidate_symbols(
+        top_tokens, open_symbols, compliance=_force_execute,
+    )
+    if not candidates:
+        logger.info("No trade candidates after blacklist/open-position filter — skipping")
         return _result("skipped", 0, reason="no_available_token")
+
+    symbol, route_reason, route_failures = await pick_routable_symbol(candidates, action="BUY")
+    for sym, err in route_failures:
+        _auto_blacklist(sym, err)
+    if not symbol:
+        logger.warning("[RouteCheck] No routable token in %d candidates — skipping", len(candidates))
+        return _result("skipped", 0, reason="unroutable_token", error=route_reason)
 
     base = symbol
 
@@ -361,29 +389,7 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
             return _result("skipped", 0, reason="drawdown_halt",
                            drawdown_pct=dd_pre["drawdown_pct"])
 
-    # ── Daily trade quota — competition requires ≥1 trade/day ─────────────
-    # When trades_today == 0 inside the live window, force a trade immediately:
-    # override Claude HOLD, skip edge gate + backtest. Escalate further after 23 UTC.
-    _force_execute    = False
-    _compliance_mode  = "normal"
-    _fear_size_mult   = 1.0
-    if config.COMPETITION_MODE:
-        now          = datetime.now(timezone.utc)
-        in_window    = COMPETITION_START <= now <= COMPETITION_END
-        trades_today = await get_daily_trade_count()
-        utc_hour     = now.hour
-        if in_window and trades_today == 0:
-            _force_execute   = True
-            _compliance_mode = "alert"
-            logger.warning(
-                "[Compliance] Daily trade quota (0 today) — forcing entry, bypassing gates",
-            )
-            if utc_hour >= 23:
-                _compliance_mode = "hard"
-                logger.warning(
-                    "[Compliance] HARD window (hour=%d UTC) — last-chance force trade",
-                    utc_hour,
-                )
+    # ── Daily trade quota flags set above (before routable symbol pick) ───
 
     run = await create_agent_run()
     strategies_generated = 0
@@ -768,16 +774,16 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
             compass["regime"], drawdown_zone["zone"],
         )
 
-        # ── Pre-flight route check (no gas, no tx) ────────────────────────
+        # Route already verified at cycle start; re-check only if executor was recreated
         if config.TWAK_REST_URL and hasattr(executor, "test_route"):
-            route_ok, route_err = await executor.test_route(base)
+            route_ok, route_err = await executor.test_route(base, action=strategy["action"])
             if not route_ok:
                 _auto_blacklist(symbol, route_err)
-                logger.warning("[RouteCheck] %s unroutable — blacklisted. Skipping.", symbol)
+                logger.warning("[RouteCheck] %s unroutable at execution — blacklisted.", symbol)
                 await _finish_run(run.id, strategies_generated, 0, 0.0, f"skip:unroutable_token:{symbol}")
                 return _result("skipped", run.id, reason="unroutable_token",
                                symbol=symbol, error=route_err)
-            logger.info("[RouteCheck] %s route OK", symbol)
+            logger.info("[RouteCheck] %s route OK (%s)", symbol, strategy["action"])
 
         try:
             swap = await executor.swap(token_in, token_out, position_usd)

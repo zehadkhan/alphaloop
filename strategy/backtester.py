@@ -53,6 +53,9 @@ class Backtester:
         take_profit: float = float(strategy["take_profit"])
         action = strategy["action"]
 
+        if entry_price <= 0:
+            return self._empty_result(f"Invalid entry_price {entry_price}")
+
         sl_pct = (stop_loss   - entry_price) / entry_price * 100
         tp_pct = (take_profit - entry_price) / entry_price * 100
 
@@ -246,6 +249,8 @@ class Backtester:
 
     @staticmethod
     def _pnl_percent(action: str, entry: float, exit_: float) -> float:
+        if entry <= 0:
+            return 0.0
         if action == "BUY":
             return (exit_ - entry) / entry
         return (entry - exit_) / entry
@@ -267,13 +272,16 @@ class Backtester:
     def _max_drawdown(equity_curve: list[float]) -> float:
         arr   = np.array(equity_curve)
         peaks = np.maximum.accumulate(arr)
-        return float(((arr - peaks) / peaks).min())
+        safe_peaks = np.where(peaks > 0, peaks, 1.0)
+        return float(((arr - peaks) / safe_peaks).min())
 
     @staticmethod
     def _sharpe_ratio(equity_curve: list[float], risk_free: float = 0.0) -> float:
         if len(equity_curve) < 2:
             return 0.0
-        returns = np.diff(equity_curve) / equity_curve[:-1]
+        denom = np.array(equity_curve[:-1])
+        denom = np.where(denom > 0, denom, 1.0)
+        returns = np.diff(equity_curve) / denom
         std = float(np.std(returns, ddof=1))
         if std == 0 or math.isnan(std):
             return 0.0

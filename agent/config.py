@@ -33,16 +33,20 @@ class Config:
     # Chinese-character tokens and non-Binance-listed exotics excluded gracefully by scanner.
     # Tokens confirmed unroutable on TWAK/PancakeSwap — do not add back without testing
     TWAK_BLACKLIST: set[str] = {
-        "TON",    # KeyError in scanner (not a standard Binance BEP-20 pair)
-        "ZRO",    # TOKEN_NOT_FOUND on TWAK — no BSC liquidity pool
-        "STG",    # APPROVAL_SENT_SWAP_FAILED — swap reverts on 0x router
-        "LAB",    # Binance-invalid, causes scanner 400 errors
-        "NFT",    # Binance-invalid pair
-        "LUNC",   # 1.2% transfer tax breaks 0x router (APPROVAL_SENT_SWAP_FAILED)
-        "PENDLE", # Previously FAILED — unroutable on TWAK
-        "FLOKI",  # Non-standard decimals, TWAK can't auto-detect
-        "DEXE",   # Repeated swap failures — no reliable TWAK route
+        # Confirmed unroutable on TWAK/BSC (live route checks + swap failures)
+        "TON", "ZRO", "STG", "LAB", "NFT", "LUNC", "PENDLE", "FLOKI", "DEXE",
+        "LINK", "DOT", "ATOM", "AVAX", "AAVE", "UNI", "APE", "DOGE", "ETC",
+        "BCH", "AXL", "BAT", "BEAM", "DUSK", "ELF", "FET", "FIL", "FORM",
+        "HUMA", "KAVA", "PLUME", "ZEC",
     }
+
+    # Tried first when forcing a daily compliance trade (must have BSC liquidity)
+    COMPLIANCE_PRIORITY_TOKENS: list[str] = [
+        "ETH", "XRP", "ADA", "ZIL", "COMP", "CAKE", "SNX", "1INCH",
+        "SUSHI", "YFI", "INJ", "AIOZ", "BONK", "CHEEMS", "ACH", "TRX",
+        "LTC", "SHIB", "BRETT", "BABYDOGE", "TWT", "SFP", "BTT", "XCN",
+        "APR", "VELO", "ZIG", "OPEN", "ROSE", "AXS",
+    ]
 
     ELIGIBLE_TOKENS: list[str] = [
         # Major L1/L2
