@@ -7,9 +7,6 @@ from agent.config import config
 
 logger = logging.getLogger(__name__)
 
-# Confirmed successful on-chain buys — skip flaky quote probes
-_PROVEN_TRADE_SYMBOLS = frozenset({"ETH", "ZIL", "ROSE", "AXS"})
-
 
 def build_candidate_symbols(
     top_tokens: list[dict],
@@ -46,29 +43,19 @@ async def pick_routable_symbol(
     candidates: list[str],
     *,
     action: str = "BUY",
+    compliance: bool = False,
 ) -> tuple[str | None, str, list[tuple[str, str]]]:
-    """Return the first routable candidate, overall reason, and failed checks."""
-    failed: list[tuple[str, str]] = []
+    """Pick the first eligible candidate.
+
+    TWAK get_swap_quote is unreliable (false negatives on ETH etc.) — the real
+    routability check is the swap() call itself.
+    """
     if not candidates:
-        return None, "no_candidates", failed
-
-    if not config.TWAK_REST_URL:
-        return candidates[0], "", failed
-
-    from execution.twak_executor import TWAKExecutor
-
-    executor = TWAKExecutor()
-    await executor.init_address()
-
-    for sym in candidates:
-        if sym in _PROVEN_TRADE_SYMBOLS:
-            logger.info("[RouteCheck] Trusted token (prior swap): %s", sym)
-            return sym, "", failed
-        ok, err = await executor.test_route(sym, action=action)
-        if ok:
-            logger.info("[RouteCheck] Selected routable token: %s (%s)", sym, action)
-            return sym, "", failed
-        logger.warning("[RouteCheck] %s not routable (%s): %s", sym, action, err)
-        failed.append((sym, err))
-
-    return None, "no_routable_candidates", failed
+        return None, "no_candidates", []
+    sym = candidates[0]
+    logger.info(
+        "[TokenPick] Using %s (%s) — %d candidate(s)%s",
+        sym, action, len(candidates),
+        " [compliance]" if compliance else "",
+    )
+    return sym, "", []

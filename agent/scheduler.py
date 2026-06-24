@@ -298,7 +298,9 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
         logger.info("No trade candidates after blacklist/open-position filter — skipping")
         return _result("skipped", 0, reason="no_available_token")
 
-    symbol, route_reason, route_failures = await pick_routable_symbol(candidates, action="BUY")
+    symbol, route_reason, _route_failures = await pick_routable_symbol(
+        candidates, action="BUY", compliance=_force_execute,
+    )
     if not symbol:
         logger.warning("[RouteCheck] No routable token in %d candidates — skipping", len(candidates))
         return _result("skipped", 0, reason="unroutable_token", error=route_reason)
@@ -735,17 +737,6 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
             base_position, compass_mult * 100, zone_mult * 100, position_usd,
             compass["regime"], drawdown_zone["zone"],
         )
-
-        # Route already verified at cycle start; re-check only if executor was recreated
-        if config.TWAK_REST_URL and hasattr(executor, "test_route"):
-            route_ok, route_err = await executor.test_route(base, action=strategy["action"])
-            if not route_ok:
-                auto_blacklist(symbol, route_err)
-                logger.warning("[RouteCheck] %s unroutable at execution — blacklisted.", symbol)
-                await _finish_run(run.id, strategies_generated, 0, 0.0, f"skip:unroutable_token:{symbol}")
-                return _result("skipped", run.id, reason="unroutable_token",
-                               symbol=symbol, error=route_err)
-            logger.info("[RouteCheck] %s route OK (%s)", symbol, strategy["action"])
 
         try:
             swap = await executor.swap(token_in, token_out, position_usd)
