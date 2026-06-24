@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Pause, Play, X, Save, AlertTriangle, Settings, Brain, DollarSign, Target, Zap, Timer, Lock, TrendingDown } from "lucide-react";
+import { Pause, Play, X, Save, AlertTriangle, Settings, Brain, DollarSign, Target, Zap, Timer, Lock, TrendingDown, RotateCcw } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import type { BotConfig } from "@/types";
 
@@ -21,6 +21,8 @@ export default function AdminPanel({ config, onUpdate }: Props) {
   const [closing, setClosing] = useState(false);
   const [selling, setSelling] = useState(false);
   const [sellResult, setSellResult] = useState<{sold: {symbol:string,bnb_received:number}[], total_bnb:number, total_usd:number} | null>(null);
+  const [resettingBlacklist, setResettingBlacklist] = useState(false);
+  const [blacklistResetResult, setBlacklistResetResult] = useState<{ removed: number; blacklist_size: number } | null>(null);
   const [toggling, setToggling] = useState(false);
   const [saved, setSaved] = useState(false);
   const [password, setPassword] = useState("");
@@ -79,6 +81,26 @@ export default function AdminPanel({ config, onUpdate }: Props) {
       onUpdate();
     } finally {
       setToggling(false);
+    }
+  };
+
+  const handleResetBlacklist = async () => {
+    if (!confirm("Clear auto-blacklisted tokens? ETH/XRP etc. can be traded again. Permanent bad tokens (DEXE, FLOKI…) stay blocked.")) return;
+    setResettingBlacklist(true);
+    setBlacklistResetResult(null);
+    setAuthError(false);
+    try {
+      const res = await fetch("/api/proxy/admin/reset-blacklist", { method: "POST", headers: adminHeaders() });
+      if (res.status === 401) { setAuthError(true); return; }
+      const data = await res.json();
+      if (data.ok) {
+        setBlacklistResetResult({ removed: data.removed ?? 0, blacklist_size: data.blacklist_size ?? 0 });
+        onUpdate();
+      } else {
+        alert(data.error ?? "Reset failed");
+      }
+    } finally {
+      setResettingBlacklist(false);
     }
   };
 
@@ -333,6 +355,25 @@ export default function AdminPanel({ config, onUpdate }: Props) {
                 <h3 className="text-xs font-semibold text-text-muted uppercase tracking-wider mb-3 flex items-center gap-1.5">
                   <AlertTriangle size={12} className="text-loss" /> Emergency
                 </h3>
+
+                {/* Reset token blacklist */}
+                <button
+                  onClick={handleResetBlacklist}
+                  disabled={resettingBlacklist}
+                  className="w-full flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-sm bg-accent/10 text-accent border border-accent/30 hover:bg-accent/20 transition-all"
+                >
+                  <RotateCcw size={15} />
+                  {resettingBlacklist ? "Resetting…" : "Reset Token Blacklist"}
+                </button>
+                <p className="text-xs text-text-muted text-center">
+                  Unblocks tokens wrongly marked unroutable (keeps DEXE, FLOKI, LUNC…)
+                </p>
+                {blacklistResetResult && (
+                  <div className="rounded-xl border border-border-subtle bg-surface-2 p-3 text-xs text-center text-text-primary">
+                    Removed <span className="font-semibold text-profit">{blacklistResetResult.removed}</span> token(s) —{" "}
+                    <span className="font-semibold">{blacklistResetResult.blacklist_size}</span> still blocked
+                  </div>
+                )}
 
                 {/* Sell all tokens → BNB */}
                 <button
