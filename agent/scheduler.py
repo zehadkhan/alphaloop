@@ -299,8 +299,6 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
         return _result("skipped", 0, reason="no_available_token")
 
     symbol, route_reason, route_failures = await pick_routable_symbol(candidates, action="BUY")
-    for sym, err in route_failures:
-        auto_blacklist(sym, err)
     if not symbol:
         logger.warning("[RouteCheck] No routable token in %d candidates — skipping", len(candidates))
         return _result("skipped", 0, reason="unroutable_token", error=route_reason)

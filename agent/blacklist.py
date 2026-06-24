@@ -18,17 +18,20 @@ _PERMANENT_SIGNALS = (
     "no route",
     "NO_ROUTE",
     "No route",
-    "not routable",
-    "quote returned zero",
 )
+
+# Tokens with confirmed on-chain swaps — never auto-blacklist from quote probes
+_PROVEN_TRADE_SYMBOLS = frozenset({"ETH", "ZIL", "ROSE", "AXS"})
 
 
 def should_blacklist(symbol: str, reason: str) -> bool:
-    """Only blacklist on confirmed routing failures, not transient TWAK errors."""
+    """Only blacklist on confirmed swap/routing failures, not quote probe noise."""
     sym = symbol.upper()
+    if sym in _PROVEN_TRADE_SYMBOLS:
+        return False
     if sym in config.COMPLIANCE_PRIORITY_TOKENS:
         return any(sig.lower() in reason.lower() for sig in _PERMANENT_SIGNALS)
-    return any(sig.lower() in reason.lower() for sig in _PERMANENT_SIGNALS) or "unroutable" in reason.lower()
+    return any(sig.lower() in reason.lower() for sig in _PERMANENT_SIGNALS)
 
 
 def load_persisted_blacklist() -> None:

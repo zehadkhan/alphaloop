@@ -23,23 +23,42 @@ logger = logging.getLogger(__name__)
 _bsc_address_cache: dict[str, str] = {}
 
 # Tokens TWAK recognises by symbol without needing a contract address
-_TWAK_KNOWN_SYMBOLS = {"BNB", "ETH", "USDT", "USDC", "BUSD", "WBTC", "BTC", "CAKE"}
+_TWAK_KNOWN_SYMBOLS = {"BNB", "ETH", "USDT", "USDC", "BUSD", "WBTC", "BTC", "CAKE", "XRP", "ADA"}
+
+
+def _extract_quote_out(data: dict) -> float:
+    """Pull output amount from TWAK quote response (flat or nested)."""
+    for key in ("toAmount", "estimatedOutput", "amountOut", "outputAmount", "buyAmount"):
+        val = data.get(key)
+        if val is not None:
+            try:
+                out = float(val)
+                if out > 0:
+                    return out
+            except (TypeError, ValueError):
+                pass
+    for nested_key in ("quote", "result", "data", "swap"):
+        nested = data.get(nested_key)
+        if isinstance(nested, dict):
+            out = _extract_quote_out(nested)
+            if out > 0:
+                return out
+    return 0.0
 
 
 async def _resolve_bsc_token(symbol: str) -> str:
     """Return the best identifier for *symbol* that TWAK's swap endpoint accepts.
 
-    Returns the symbol as-is for well-known tokens. For others, queries CMC to get
-    the BEP-20 contract address (cached per process). Falls back to the symbol if
-    the lookup fails so the caller can still attempt the swap.
+    Well-known symbols are sent as-is (TWAK resolves internally). Others use the
+    hard-mapped BEP-20 address or CMC lookup.
     """
     sym = symbol.upper()
+    if sym in _TWAK_KNOWN_SYMBOLS:
+        return sym
     hard = get_bsc_address(sym)
     if hard:
         _bsc_address_cache[sym] = hard
         return hard
-    if sym in _TWAK_KNOWN_SYMBOLS:
-        return sym
     if sym in _bsc_address_cache:
         return _bsc_address_cache[sym]
 
@@ -228,8 +247,8 @@ class TWAKExecutor:
                 "toToken":   token_out,
                 "amount":    "1",
             })
-            out = data.get("toAmount") or data.get("estimatedOutput") or "0"
-            price = float(out)
+            out = _extract_quote_out(data)
+            price = out
             if price > 0:
                 logger.info("Price %s/%s via TWAK: %.6f", token_in, token_out, price)
                 return price
@@ -260,20 +279,17 @@ class TWAKExecutor:
         """
         try:
             token = token.upper()
-            resolved = await _resolve_bsc_token(token)
-            if action.upper() == "BUY":
-                from_token, to_token, amount = quote, resolved, "0.001"
-            else:
-                from_token, to_token, amount = resolved, quote, "0.001"
+            from_resolved = await _resolve_bsc_token(quote if action.upper() == "BUY" else token)
+            to_resolved   = await _resolve_bsc_token(token if action.upper() == "BUY" else quote)
+            amount = "0.003" if action.upper() == "BUY" else "0.001"
             data = await self._call("get_swap_quote", {
                 "fromChain": _get_chain(),
-                "fromToken": from_token,
+                "fromToken": from_resolved,
                 "toChain":   _get_chain(),
-                "toToken":   to_token,
+                "toToken":   to_resolved,
                 "amount":    amount,
             })
-            out = float(data.get("toAmount") or data.get("estimatedOutput") or "0")
-            if out > 0:
+            if _extract_quote_out(data) > 0:
                 return True, ""
             return False, "quote returned zero output"
         except TWAKExecutorError as exc:

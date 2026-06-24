@@ -7,6 +7,9 @@ from agent.config import config
 
 logger = logging.getLogger(__name__)
 
+# Confirmed successful on-chain buys — skip flaky quote probes
+_PROVEN_TRADE_SYMBOLS = frozenset({"ETH", "ZIL", "ROSE", "AXS"})
+
 
 def build_candidate_symbols(
     top_tokens: list[dict],
@@ -58,6 +61,9 @@ async def pick_routable_symbol(
     await executor.init_address()
 
     for sym in candidates:
+        if sym in _PROVEN_TRADE_SYMBOLS:
+            logger.info("[RouteCheck] Trusted token (prior swap): %s", sym)
+            return sym, "", failed
         ok, err = await executor.test_route(sym, action=action)
         if ok:
             logger.info("[RouteCheck] Selected routable token: %s (%s)", sym, action)
