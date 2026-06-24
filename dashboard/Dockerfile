@@ -21,7 +21,7 @@ COPY . .
 ENV GENERATE_SOURCEMAP=false
 ENV NEXT_PRIVATE_WORKER_COUNT=1
 
-RUN NODE_ENV=development NPM_CONFIG_PRODUCTION=false npm run build \
+RUN npm run build \
     && mkdir -p .next/standalone/.next \
     && cp -r .next/static .next/standalone/.next/static
 
