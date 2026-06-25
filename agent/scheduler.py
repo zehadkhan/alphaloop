@@ -28,7 +28,7 @@ from agent.competition import (
     force_close_stale_positions,
 )
 from agent.portfolio import cap_position_usd
-from agent.pricing import round_price
+from agent.pricing import round_price, sanitise_exit_price
 from agent.routing import build_candidate_symbols, pick_routable_symbol
 from agent.proof import build_proof, commit_proof_onchain
 from data.token_scanner import TokenScanner
@@ -174,8 +174,10 @@ async def monitor_open_trades() -> dict:
                     )
                     sell_swap = await sell_executor.swap(trade.symbol, "BNB", sell_value_usd)
                     sell_tx_hash = sell_swap.get("tx_hash")
-                    if sell_swap.get("price") and sell_swap["price"] > 0:
-                        actual_exit_price = sell_swap["price"]
+                    swap_px = float(sell_swap.get("price") or 0)
+                    actual_exit_price = sanitise_exit_price(
+                        trade.entry_price, swap_px, exit_price,
+                    )
                     logger.info(
                         "[Monitor] SELL executed: tx=%s  exit_price=%.8f",
                         sell_tx_hash, actual_exit_price,

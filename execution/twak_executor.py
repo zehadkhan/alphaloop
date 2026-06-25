@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 _bsc_address_cache: dict[str, str] = {}
 
 # Tokens TWAK recognises by symbol without needing a contract address
-_TWAK_KNOWN_SYMBOLS = {"BNB", "ETH", "USDT", "USDC", "BUSD", "WBTC", "BTC", "CAKE", "XRP", "ADA"}
+_TWAK_KNOWN_SYMBOLS = {"BNB", "ETH", "USDT", "USDC", "BUSD", "WBTC", "BTC"}
 
 
 def _extract_quote_out(data: dict) -> float:

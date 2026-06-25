@@ -15,3 +15,14 @@ def round_price(price: float) -> float:
     if ap < 1:
         return round(price, 6)
     return round(price, 4)
+
+
+def sanitise_exit_price(entry: float, candidate: float, fallback: float) -> float:
+    """Use TWAK swap price only if plausible vs entry; else Binance fallback."""
+    if entry <= 0 or candidate <= 0:
+        return fallback
+    ratio = candidate / entry
+    # TP/SL/timeout closes should be within ~±50% for scalps
+    if 0.5 <= ratio <= 1.5:
+        return candidate
+    return fallback
