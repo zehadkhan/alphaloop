@@ -65,7 +65,7 @@ _cycle_lock = asyncio.Lock()
 # Last computed compass — exposed via /status endpoint
 _last_compass: dict | None = None
 
-from agent.blacklist import auto_blacklist, load_persisted_blacklist
+from agent.blacklist import auto_blacklist, load_persisted_blacklist, record_failure, reset_failure_count
 # Trade lifecycle monitor
 # ---------------------------------------------------------------------------
 
@@ -745,14 +745,7 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
         except Exception as swap_exc:
             err_msg = f"{type(swap_exc).__name__}: {swap_exc}"
             logger.error("[Swap] Failed for %s: %s", symbol, err_msg)
-            # Auto-blacklist tokens with routing errors so we never retry them
-            unroutable_signals = (
-                "TOKEN_NOT_FOUND", "APPROVAL_SENT_SWAP_FAILED",
-                "VALIDATION_ERROR", "400 Bad Request",
-                "no route", "NO_ROUTE", "No route",
-            )
-            if any(sig in err_msg for sig in unroutable_signals):
-                auto_blacklist(symbol, err_msg[:120])
+            record_failure(symbol, err_msg[:120])
             await create_trade({
                 "strategy_id": db_strategy.id,
                 "symbol":      symbol,
@@ -770,6 +763,7 @@ async def _run_cycle_impl() -> dict:  # noqa: C901
                            symbol=symbol, action=strategy["action"])
 
         trades_executed = 1
+        reset_failure_count(symbol)
 
         logger.info(
             "Swap %s: %s %.6f → %s %.6f  price=%.4f  status=%s  tx=%s",

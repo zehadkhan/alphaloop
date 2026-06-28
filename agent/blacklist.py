@@ -23,6 +23,10 @@ _PERMANENT_SIGNALS = (
 # Tokens with confirmed on-chain swaps — never auto-blacklist from quote probes
 _PROVEN_TRADE_SYMBOLS = frozenset({"ETH", "ZIL", "ROSE", "AXS"})
 
+# Consecutive swap failure tracking — blacklist after threshold regardless of error type
+_failure_counts: dict[str, int] = {}
+_FAILURE_THRESHOLD = 3
+
 
 def should_blacklist(symbol: str, reason: str) -> bool:
     """Only blacklist on confirmed swap/routing failures, not quote probe noise."""
@@ -32,6 +36,47 @@ def should_blacklist(symbol: str, reason: str) -> bool:
     if sym in config.COMPLIANCE_PRIORITY_TOKENS:
         return any(sig.lower() in reason.lower() for sig in _PERMANENT_SIGNALS)
     return any(sig.lower() in reason.lower() for sig in _PERMANENT_SIGNALS)
+
+
+def _force_blacklist(sym: str, reason: str) -> None:
+    """Add sym to blacklist unconditionally and persist."""
+    if sym in config.TWAK_BLACKLIST:
+        return
+    config.TWAK_BLACKLIST.add(sym)
+    logger.warning("[Blacklist] AUTO-BLACKLISTED %s — %s", sym, reason[:120])
+    try:
+        os.makedirs(os.path.dirname(_BLACKLIST_PATH), exist_ok=True)
+        existing: list = json.loads(open(_BLACKLIST_PATH).read()) if os.path.exists(_BLACKLIST_PATH) else []
+        if sym not in existing:
+            existing.append(sym)
+            with open(_BLACKLIST_PATH, "w") as f:
+                json.dump(existing, f, indent=2)
+    except Exception as exc:
+        logger.warning("[Blacklist] Could not persist blacklist: %s", exc)
+
+
+def record_failure(symbol: str, reason: str) -> None:
+    """Record a swap failure. Blacklists immediately on known signals or after 3 consecutive failures."""
+    sym = symbol.upper()
+    if sym in config.TWAK_BLACKLIST:
+        return
+    # Immediate blacklist for confirmed unroutable signals
+    if should_blacklist(sym, reason):
+        _force_blacklist(sym, reason)
+        _failure_counts.pop(sym, None)
+        return
+    # Count-based blacklist for any other repeated failure
+    _failure_counts[sym] = _failure_counts.get(sym, 0) + 1
+    count = _failure_counts[sym]
+    logger.info("[Blacklist] Failure %d/%d for %s: %s", count, _FAILURE_THRESHOLD, sym, reason[:80])
+    if count >= _FAILURE_THRESHOLD:
+        _force_blacklist(sym, f"repeated swap failures ({count}x): {reason[:80]}")
+        _failure_counts.pop(sym, None)
+
+
+def reset_failure_count(symbol: str) -> None:
+    """Clear failure counter on successful swap."""
+    _failure_counts.pop(symbol.upper(), None)
 
 
 def load_persisted_blacklist() -> None:
