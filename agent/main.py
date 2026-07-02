@@ -650,59 +650,145 @@ async def admin_reset_blacklist(x_admin_password: str = Header(default="")) -> d
 
 @app.post("/admin/sell-tokens", tags=["admin"])
 async def admin_sell_tokens(x_admin_password: str = Header(default="")) -> dict:
-    """Sell all non-BNB token balances in the TWAK wallet back to BNB."""
+    """Sell ALL non-BNB token balances in the TWAK wallet back to BNB.
+
+    Discovers every token the wallet holds via BSCScan tokentx + the full
+    competition eligible list, checks on-chain balance (with correct decimals),
+    gets price, computes USD value, then sells anything above $0.10.
+    """
     _check_admin_password(x_admin_password)
     if not config.TWAK_REST_URL:
         raise HTTPException(status_code=503, detail="TWAK not configured")
 
-    from execution.twak_executor import TWAKExecutor, _resolve_bsc_token
+    from execution.twak_executor import TWAKExecutor
     import httpx as _httpx
 
     wallet = "0xa401A91faa968Ee4334780712C95Af208E570e0F"
     rpc    = "https://bsc-dataseed.binance.org/"
 
-    # Check symbols from open trades + common stuck tokens
-    all_trades = await list_open_buy_trades()
-    check_symbols = {t.symbol for t in all_trades}
-    check_symbols |= {"AXS", "ZIL", "DEXE", "LUNC", "ETH", "FLOKI", "ROSE",
-                      "ADA", "LINK", "DOT", "AVAX", "ATOM", "DOGE", "SHIB"}
-    check_symbols -= {"BNB", "USDT", "USDC", "BUSD"}
+    SKIP_CONTRACTS = {
+        "0x55d398326f99059ff775485246999027b3197955",  # USDT
+        "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d",  # USDC
+        "0xe9e7cea3dedca5984780bafc599bd69add087d56",  # BUSD
+        "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",  # WBNB
+    }
 
-    async def _bsc_balance(contract: str, decimals: int = 18) -> float:
-        data = "0x70a08231" + "000000000000000000000000" + wallet[2:].lower()
+    async def _rpc_call(client: _httpx.AsyncClient, method: str, params: list) -> str:
+        r = await client.post(rpc, json={"jsonrpc": "2.0", "method": method,
+                                         "params": params, "id": 1}, timeout=8)
+        return r.json().get("result", "0x0")
+
+    async def _fetch_decimals(contract: str) -> int:
         try:
             async with _httpx.AsyncClient(timeout=8) as c:
-                r = await c.post(rpc, json={"jsonrpc": "2.0", "method": "eth_call",
-                    "params": [{"to": contract, "data": data}, "latest"], "id": 1})
-            result = r.json().get("result", "0x0")
+                result = await _rpc_call(c, "eth_call",
+                                         [{"to": contract, "data": "0x313ce567"}, "latest"])
+            val = int(result, 16)
+            return val if 0 < val <= 18 else 18
+        except Exception:
+            return 18
+
+    async def _bsc_balance(contract: str) -> float:
+        """Return token balance with correct on-chain decimals."""
+        data = "0x70a08231" + "000000000000000000000000" + wallet[2:].lower()
+        try:
+            decimals = await _fetch_decimals(contract)
+            async with _httpx.AsyncClient(timeout=8) as c:
+                result = await _rpc_call(c, "eth_call", [{"to": contract, "data": data}, "latest"])
             return int(result, 16) / 10**decimals
         except Exception:
             return 0.0
 
+    # --- Discover all token contracts ---
+    # contract_addr (lower) -> symbol string
+    discovered: dict[str, str] = {}
+
+    # 1) BSCScan tokentx — covers every token ever received
+    try:
+        async with _httpx.AsyncClient(timeout=20) as c:
+            r = await c.get("https://api.bscscan.com/api", params={
+                "module": "account", "action": "tokentx",
+                "address": wallet, "page": 1, "offset": 2000,
+                "sort": "desc", "apikey": "YourApiKeyToken",
+            })
+        txs = r.json().get("result", [])
+        if isinstance(txs, list):
+            for tx in txs:
+                addr = tx.get("contractAddress", "").lower()
+                sym  = tx.get("tokenSymbol", "").upper()
+                if addr and addr not in SKIP_CONTRACTS:
+                    discovered[addr] = sym or ""
+        logger.info("[SellAll] BSCScan returned %d tx records, %d unique contracts",
+                    len(txs) if isinstance(txs, list) else 0, len(discovered))
+    except Exception as exc:
+        logger.warning("[SellAll] BSCScan discovery failed: %s", exc)
+
+    # 2) All 149 competition tokens — catches anything we bought but BSCScan missed
+    from execution.twak_executor import _resolve_bsc_token
+    all_trades = await list_open_buy_trades()
+    eligible_syms = set(config.ELIGIBLE_TOKENS) | {t.symbol for t in all_trades}
+    eligible_syms -= {"BNB", "USDT", "USDC", "BUSD", "WBNB"}
+
+    for sym in eligible_syms:
+        contract = await _resolve_bsc_token(sym)
+        if contract and contract != sym:  # got a real address
+            addr = contract.lower()
+            if addr not in SKIP_CONTRACTS:
+                discovered.setdefault(addr, sym.upper())
+
+    logger.info("[SellAll] Total contracts to check: %d", len(discovered))
+
+    executor = TWAKExecutor()
     sold     = []
     errors   = []
-    executor = TWAKExecutor()
+    skipped  = 0
 
-    for sym in sorted(check_symbols):
+    for contract, sym in discovered.items():
         try:
-            contract = await _resolve_bsc_token(sym)
-            if contract == sym:
-                continue  # couldn't resolve BSC address
             bal = await _bsc_balance(contract)
-            if bal < 1e-8:
+            if bal < 1e-6:
+                skipped += 1
                 continue
-            logger.info("[SellAll] %s balance=%.6f — selling", sym, bal)
-            swap = await executor.swap(sym, "BNB", bal * 0.999)
+
+            # Get USD value: balance_tokens * price_per_token
+            label = sym if sym else contract[:10]
+            try:
+                price_usd = await executor.get_price(sym if sym else contract, "USDT")
+            except Exception:
+                price_usd = 0.0
+
+            usd_value = bal * price_usd
+            if usd_value < 0.10:
+                skipped += 1
+                logger.debug("[SellAll] %s bal=%.4f price=%.6f usd=%.4f — dust, skip",
+                             label, bal, price_usd, usd_value)
+                continue
+
+            logger.info("[SellAll] %s bal=%.4f @ $%.4f = $%.2f — selling",
+                        label, bal, price_usd, usd_value)
+            swap = await executor.swap(sym if sym else contract, "BNB", usd_value * 0.999)
             bnb  = swap.get("amount_out", 0.0)
-            sold.append({"symbol": sym, "amount": round(bal, 6),
-                         "bnb_received": round(bnb, 6), "tx_hash": swap.get("tx_hash")})
+            sold.append({
+                "symbol": label,
+                "contract": contract,
+                "amount_tokens": round(bal, 6),
+                "usd_value": round(usd_value, 2),
+                "bnb_received": round(bnb, 6),
+                "tx_hash": swap.get("tx_hash"),
+            })
         except Exception as exc:
-            errors.append({"symbol": sym, "error": str(exc)})
-            logger.warning("[SellAll] %s: %s", sym, exc)
+            errors.append({"symbol": sym or contract[:10], "contract": contract, "error": str(exc)})
+            logger.warning("[SellAll] %s: %s", sym or contract[:10], exc)
 
     total_bnb = sum(s["bnb_received"] for s in sold)
-    return {"sold": sold, "total_bnb": round(total_bnb, 6),
-            "total_usd": round(total_bnb * 573, 2), "errors": errors}
+    bnb_price = 550.0
+    return {
+        "sold": sold,
+        "skipped_dust": skipped,
+        "total_bnb": round(total_bnb, 6),
+        "total_usd": round(total_bnb * bnb_price, 2),
+        "errors": errors,
+    }
 
 
 @app.post("/competition/scan", tags=["competition"])
