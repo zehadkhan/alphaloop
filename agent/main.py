@@ -734,25 +734,26 @@ async def admin_sell_tokens(x_admin_password: str = Header(default="")) -> dict:
         "0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c": "BTC",   # Binance-Peg BTC (BTCB)
     }
 
-    # 1) BSCScan tokentx — covers every token ever received
-    try:
-        async with _httpx.AsyncClient(timeout=20) as c:
-            r = await c.get("https://api.bscscan.com/api", params={
-                "module": "account", "action": "tokentx",
-                "address": wallet, "page": 1, "offset": 2000,
-                "sort": "desc", "apikey": "YourApiKeyToken",
-            })
-        txs = r.json().get("result", [])
-        if isinstance(txs, list):
-            for tx in txs:
-                addr = tx.get("contractAddress", "").lower()
-                sym  = tx.get("tokenSymbol", "").upper()
-                if addr and addr not in SKIP_CONTRACTS:
-                    discovered[addr] = sym or ""
-        logger.info("[SellAll] BSCScan returned %d tx records, %d unique contracts",
-                    len(txs) if isinstance(txs, list) else 0, len(discovered))
-    except Exception as exc:
-        logger.warning("[SellAll] BSCScan discovery failed: %s", exc)
+    # 1) Moralis Web3 API — free token balances endpoint (no deprecated V1 issue)
+    moralis_key = os.getenv("MORALIS_API_KEY", "")
+    if moralis_key:
+        try:
+            async with _httpx.AsyncClient(timeout=20) as c:
+                r = await c.get(
+                    f"https://deep-index.moralis.io/api/v2.2/{wallet}/erc20",
+                    params={"chain": "bsc"},
+                    headers={"X-API-Key": moralis_key},
+                )
+            tokens_data = r.json()
+            if isinstance(tokens_data, list):
+                for t in tokens_data:
+                    addr = t.get("token_address", "").lower()
+                    sym  = t.get("symbol", "").upper()
+                    if addr and addr not in SKIP_CONTRACTS:
+                        discovered[addr] = sym or ""
+                logger.info("[SellAll] Moralis returned %d tokens", len(tokens_data))
+        except Exception as exc:
+            logger.warning("[SellAll] Moralis discovery failed: %s", exc)
 
     # 2) All 149 competition tokens — catches anything we bought but BSCScan missed
     from execution.twak_executor import _resolve_bsc_token
