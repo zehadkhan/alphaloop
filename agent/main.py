@@ -728,7 +728,11 @@ async def admin_sell_tokens(x_admin_password: str = Header(default="")) -> dict:
 
     # --- Discover all token contracts ---
     # contract_addr (lower) -> symbol string
-    discovered: dict[str, str] = {}
+    # Seed with TWAK_KNOWN_SYMBOLS that resolve to symbols (not addresses) — must be hardcoded
+    discovered: dict[str, str] = {
+        "0x2170ed0880ac9a755fd29b2688956bd959f933f8": "ETH",   # Binance-Peg ETH
+        "0x7130d2a12b9bcbfae4f2634d864a1ee1ce3ead9c": "BTC",   # Binance-Peg BTC (BTCB)
+    }
 
     # 1) BSCScan tokentx — covers every token ever received
     try:
