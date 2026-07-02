@@ -43,8 +43,7 @@ services:
       - SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
       - REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
     depends_on:
-      twak:
-        condition: service_healthy
+      - twak
     restart: unless-stopped
     healthcheck:
       test:
@@ -54,8 +53,8 @@ services:
         - 'http://localhost:8000/health'
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 20s
+      retries: 5
+      start_period: 60s
 
   dashboard:
     build:
@@ -70,8 +69,7 @@ services:
     environment:
       - 'BACKEND_URL=http://alphaloop:8000'
     depends_on:
-      alphaloop:
-        condition: service_healthy
+      - alphaloop
     restart: unless-stopped
     healthcheck:
       test:
