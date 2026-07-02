@@ -32,6 +32,7 @@ _patch_ssl_if_needed()
 
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from agent.competition import get_competition_status
 from agent.config import config
@@ -645,6 +646,32 @@ async def admin_reset_blacklist(x_admin_password: str = Header(default="")) -> d
         "removed": removed,
         "blacklist_size": len(config.TWAK_BLACKLIST),
         "blacklist": sorted(config.TWAK_BLACKLIST),
+    }
+
+
+class SellOneRequest(BaseModel):
+    symbol: str
+    contract: str = ""
+    usd_value: float
+
+
+@app.post("/admin/sell-one", tags=["admin"])
+async def admin_sell_one(body: SellOneRequest,
+                         x_admin_password: str = Header(default="")) -> dict:
+    """Sell a specific token by symbol (or contract address) for a given USD value."""
+    _check_admin_password(x_admin_password)
+    if not config.TWAK_REST_URL:
+        raise HTTPException(status_code=503, detail="TWAK not configured")
+    from execution.twak_executor import TWAKExecutor
+    executor = TWAKExecutor()
+    token_id = body.symbol if body.symbol else body.contract
+    swap = await executor.swap(token_id, "BNB", body.usd_value)
+    return {
+        "symbol": body.symbol,
+        "contract": body.contract,
+        "usd_value": body.usd_value,
+        "bnb_received": swap.get("amount_out", 0.0),
+        "tx_hash": swap.get("tx_hash"),
     }
 
 
